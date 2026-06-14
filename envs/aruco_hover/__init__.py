@@ -21,11 +21,10 @@ from . import agents
 
 gym.register(
     id="Isaac-QuadrotorHover-v0",
-    entry_point="envs.aruco_hover.quadrotor_aruco_hover_env:ArucoHoverEnv",
+    entry_point="envs.aruco_hover.quadrotor_teacher_aruco_hover_env:ArucoHoverEnv",
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": ArucoHoverEnvCfg,
         "rsl_rl_cfg_entry_point": agents.rsl_rl_ppo_cfg.QuadrotorPPORunnerCfg,
     },
 )
-

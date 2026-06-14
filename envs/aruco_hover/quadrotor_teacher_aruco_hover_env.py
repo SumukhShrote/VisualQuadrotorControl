@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """
-Quadrotor ArUco Hover Environment â€” Phase 1 (Teacher Policy)
+Quadrotor ArUco Hover Environment Phase 1 (Teacher Policy)
 =============================================================
 Task:
   Hover stably at a fixed distance (1.5 m) in front of a vertical wall
@@ -10,7 +10,7 @@ Task:
   directly at the marker.
 
 Control Interface:
-  CTBR â€” Collective Thrust + Body Rates  [thrust, roll_rate, pitch_rate, yaw_rate]
+  CTBR Collective Thrust + Body Rates  [thrust, roll_rate, pitch_rate, yaw_rate]
   Actions in [-1, 1], decoded inside _pre_physics_step.
 
 Teacher Observation (17-dim, ground-truth state):
@@ -89,10 +89,10 @@ class ArucoHoverEnvWindow(BaseEnvWindow):
 # =============================================================================
 
 @configclass
-class ArucoHoverEnvCfg(DirectRLEnvCfg):
+class ArucoHoverEnvCfg(DirectRLEnvCfg): 
     """
     Single source of truth for all hyper-parameters.
-    Never hard-code magic numbers in the env class â€” put them here.
+    Never hard-code magic numbers in the env class put them here.
     """
 
     # ---------- Episode / timing --------------------------------------------
@@ -234,7 +234,7 @@ class ArucoHoverEnv(DirectRLEnv):
 
     Key design decisions
     --------------------
-    * Goal is a FIXED hover point â€” no trajectory tracking.
+    * Goal is a FIXED hover point no trajectory tracking.
     * Wall is a kinematic RigidObject (does not fall; collisions still register).
     * CTBR control with a sub-decimation inner PD loop mirrors your reference env.
     * Domain randomisation applied per-reset for sim-to-real robustness.
@@ -384,85 +384,83 @@ class ArucoHoverEnv(DirectRLEnv):
 
         self.TM_to_f[env_ids] = torch.linalg.inv(self.f_to_TM[env_ids])
 
-    def _randomize_wall_textures(self, env_ids: torch.Tensor | None):
-        """
-        Per-reset visual DR:
-        - For each env in env_ids, pick ONE random wall texture.
-        - Apply it to all four walls in that env using OmniPBR via Replicator.
-        """
+    def _build_material_pool(self) -> list:
         if not self.cfg.visual_dr_enabled:
-            return
+            return []
 
         try:
             rep = get_replicator()
         except Exception as e:
-            print(f"[WARN] Replicator unavailable, skipping wall texture DR: {e}")
-            return
+            print(f"[WARN] Replicator unavailable: {e}")
+            return []
 
         import omni.usd
         stage = omni.usd.get_context().get_stage()
 
         texture_dir = os.path.join(MODELS_PATH, "textures", "generated")
         try:
-            texture_files = [
+            self._texture_files_cache = sorted([
                 os.path.join(texture_dir, f)
-                for f in os.listdir(texture_dir)
-                if f.endswith(".png")
-            ]
+                for f in os.listdir(texture_dir) if f.endswith(".png")
+            ])
         except FileNotFoundError:
             print(f"[WARN] Texture dir not found: {texture_dir}")
-            return
+            return []
 
-        if not texture_files:
-            print(f"[WARN] No textures found in {texture_dir}")
-            return
+        if not self._texture_files_cache:
+            print("[WARN] No textures found in generated dir")
+            return []
 
-        if env_ids is None:
-            env_indices = range(self.num_envs)
-        else:
-            env_indices = env_ids.tolist()
+        dummy_prim = stage.GetPrimAtPath("/World/envs/env_0/WallPX")
+        if not dummy_prim.IsValid():
+            print("[WARN] WallPX not found, cannot build material pool")
+            return []
 
-        for env_idx in env_indices:
-            wall_texture = random.choice(texture_files)
-
-            wall_paths = [
-                f"/World/envs/env_{env_idx}/WallPX",
-                f"/World/envs/env_{env_idx}/WallNX",
-                f"/World/envs/env_{env_idx}/WallPY",
-                f"/World/envs/env_{env_idx}/WallNY",
-            ]
-
-            prims_group = []
-            for path in wall_paths:
-                prim = stage.GetPrimAtPath(path)
-                if not prim.IsValid():
-                    continue
-                if prim.IsInstanceable():
-                    prim.SetInstanceable(False)
-                prims_group.append(prim)
-
-            if not prims_group:
-                print(f"[WARN] No walls found for env {env_idx}")
-                continue
-
-            material_prims = rep.functional.create_batch.material(
+        pool = []
+        for tex_path in self._texture_files_cache:
+            mat_prims = rep.functional.create_batch.material(
                 mdl="OmniPBR.mdl",
-                bind_prims=prims_group,
-                count=len(prims_group),
+                bind_prims=[dummy_prim],
+                count=1,
                 project_uvw=True,
             )
-
             rep.functional.modify.attribute(
-                material_prims,
-                "diffuse_texture",
-                [wall_texture] * len(material_prims),
+                mat_prims, "diffuse_texture", [tex_path]
             )
             rep.functional.modify.attribute(
-                material_prims,
-                "texture_scale",
-                [(10.0, 10.0)] * len(material_prims),
+                mat_prims, "texture_scale", [(10.0, 10.0)]
             )
+            pool.append(mat_prims[0].GetPath().pathString)
 
+        print(f"[INFO] Material pool ready: {len(pool)} materials")
+        return pool
+
+    def _randomize_wall_textures(self, env_ids: torch.Tensor | None):
+        if not self.cfg.visual_dr_enabled:
+            return
+        if not hasattr(self, '_wall_material_pool') or not self._wall_material_pool:
+            return
+
+        import omni.usd
+        from pxr import UsdShade
+
+        stage = omni.usd.get_context().get_stage()
+        n_mats = len(self._wall_material_pool)
+        wall_names = ["WallPX", "WallNX", "WallPY", "WallNY"]
+        env_indices = env_ids.tolist() if env_ids is not None else range(self.num_envs)
+
+        for env_idx in env_indices:
+            mat_path = self._wall_material_pool[random.randint(0, n_mats - 1)]
+            material = UsdShade.Material(stage.GetPrimAtPath(mat_path))
+            for wall_name in wall_names:
+                prim = stage.GetPrimAtPath(f"/World/envs/env_{env_idx}/{wall_name}")
+                if prim.IsValid():
+                    if prim.IsInstanceable():
+                        prim.SetInstanceable(False)
+                    UsdShade.MaterialBindingAPI(prim).Bind(
+                        material, UsdShade.Tokens.strongerThanDescendants
+                    )
+                                    
     def _apply_aruco_texture(self):
         """Apply ArUco PNG to wall via USD OmniPBR — called once after scene setup."""
         import omni.usd
@@ -701,6 +699,7 @@ class ArucoHoverEnv(DirectRLEnv):
         light_cfg.func("/World/Light", light_cfg)
 
         # Optional: self._apply_aruco_texture()
+        self._wall_material_pool = self._build_material_pool()
 
     # ---------- CONTROL HELPERS ----------
 
@@ -897,11 +896,12 @@ class ArucoHoverEnv(DirectRLEnv):
 
         # --------------Term 5: Orientation / facing error----------------------- 
         # The wall is at +X in local env frame. Drone faces the marker when
-        # its body-X axis points toward -X (world).
+        # its body-X axis points toward -X (world). INCORRECT
         # R[:,  :, 0] = first column of rotation matrix = body-X in world frame.
         R = matrix_from_quat(ori_w)             # (N, 3, 3)
         body_x_w = R[:, :, 0]                   # (N, 3)
-        target   = torch.tensor([-1.0, 0.0, 0.0], device=self.device)
+        # target   = torch.tensor([-1.0, 0.0, 0.0], device=self.device)
+        target   = torch.tensor([1.0, 0.0, 0.0], device=self.device)
         cos_theta   = (body_x_w * target).sum(dim=-1).clamp(-1.0, 1.0)  # (N,)
         p_orientation = self.cfg.w_orientation * (1.0 - cos_theta)
 
@@ -1088,7 +1088,7 @@ class ArucoHoverEnv(DirectRLEnv):
         default_root[:, :3] = self._hover_point_w[env_ids] + pos_noise
 
         # Orientation: yaw rotated pi (facing -x) + small yaw noise
-        base_yaw  = torch.full((n,), math.pi, device=self.device)
+        base_yaw  = torch.full((n,), 0.0, device=self.device)
         yaw_noise = (
             torch.rand(n, device=self.device) * 2.0 - 1.0
         ) * self.cfg.init_yaw_noise
