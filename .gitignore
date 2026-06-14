@@ -1,0 +1,11 @@
+logs/
+outputs/
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+*.pt
+*.onnx
+*.engine
+models/*.usd
