@@ -10,8 +10,12 @@ Teacher Quacopter Hover Environment.
 import gymnasium as gym
 
 from . import quadrotor_aruco_hover_env
-from .quadrotor_aruco_hover_env import ArucoHoverEnv
-from .quadrotor_aruco_hover_env import ArucoHoverEnvCfg
+from .quadrotor_aruco_hover_env import (
+    ArucoHoverEnvCfg,
+    ArucoHoverTeacherEnv,
+    ArucoHoverStudentEnv,
+    ArucoHoverStudentEnvCfg,
+)
 from . import agents
 
 ##
@@ -20,11 +24,32 @@ from . import agents
 
 
 gym.register(
-    id="Isaac-QuadrotorHover-v0",
-    entry_point="envs.aruco_hover.quadrotor_teacher_aruco_hover_env:ArucoHoverEnv",
+    id="Isaac-QuadrotorHoverTeacher-v0",
+    entry_point="envs.aruco_hover.quadrotor_aruco_hover_env:ArucoHoverTeacherEnv",
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": ArucoHoverEnvCfg,
-        "rsl_rl_cfg_entry_point": agents.rsl_rl_ppo_cfg.QuadrotorPPORunnerCfg,
+        "rsl_rl_cfg_entry_point": agents.rsl_rl_ppo_cfg.QuadrotorTeacherPPORunnerCfg,
+    },
+)
+
+gym.register(
+    id="Isaac-QuadrotorHoverStudent-v0",
+    entry_point="envs.aruco_hover.quadrotor_aruco_hover_env:ArucoHoverStudentEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": ArucoHoverEnvCfg,
+        "rsl_rl_cfg_entry_point": agents.rsl_rl_ppo_cfg.QuadrotorStudentPPORunnerCfg,
+    },
+)
+
+# Distillation student task (vision+IMU student, GT teacher)
+gym.register(
+    id="Isaac-QuadrotorHoverStudentDistill-v0",
+    entry_point="envs.aruco_hover.quadrotor_aruco_hover_env:ArucoHoverStudentEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": ArucoHoverStudentEnvCfg,
+        "rsl_rl_cfg_entry_point": agents.rsl_rl_distillation_cfg.QuadrotorStudentDistillationRunnerCfg,
     },
 )

@@ -2,27 +2,61 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """
-Quadrotor ArUco Hover Environment Phase 1 (Teacher Policy)
-=============================================================
-Task:
-  Hover stably at a fixed distance (1.5 m) in front of a vertical wall
-  bearing an ArUco 6x6 marker, keeping the camera (body-x axis) pointed
-  directly at the marker.
+Quadrotor ArUco Hover Environment (Teacher + Student)
+=====================================================
 
-Control Interface:
-  CTBR Collective Thrust + Body Rates  [thrust, roll_rate, pitch_rate, yaw_rate]
-  Actions in [-1, 1], decoded inside _pre_physics_step.
+Task
+----
+Hover stably at a fixed distance (1.5 m) in front of a vertical wall
+bearing an ArUco 6x6 marker, keeping the camera (body-x axis) pointed
+directly at the marker.
 
-Teacher Observation (17-dim, ground-truth state):
-  [0:3]   pos_error_b   hover point minus drone position, expressed in body frame
-  [3:6]   lin_vel_b     linear velocity in body frame
-  [6:9]   ang_vel_b     angular velocity in body frame
-  [9:12]  grav_vec_b    projected gravity unit vector in body frame
-  [12:16] last_action   previous [thrust, roll_rate, pitch_rate, yaw_rate]
-  [16]    dist_scalar   Euclidean distance to hover point (curriculum proxy)
-  Total: 17 dims  ->  set observation_space = 17
+Control Interface
+-----------------
+CTBR Collective Thrust + Body Rates  [thrust, roll_rate, pitch_rate, yaw_rate]
+Actions in [-1, 1], decoded inside _pre_physics_step.
+
+Observation Definitions
+-----------------------
+
+1) Teacher / Privileged Observation (17-dim, ground-truth state)
+   Used by the teacher policy and as privileged input for asymmetric RL:
+
+   [0:3]   pos_error_b   hover point minus drone position, expressed in body frame
+   [3:6]   lin_vel_b     linear velocity in body frame
+   [6:9]   ang_vel_b     angular velocity in body frame
+   [9:12]  grav_vec_b    projected gravity unit vector in body frame
+   [12:16] last_action   previous [thrust, roll_rate, pitch_rate, yaw_rate]
+   [16]    dist_scalar   Euclidean distance to hover point (curriculum proxy)
+
+   Total: 17 dims.
+
+2) Student Policy Observation Groups (visual + IMU)
+   Used by the visual student policy:
+
+   - images:   Onboard RGB camera, shape (num_envs, 3, H, W), values in [0, 1].
+               Full-resolution forward-facing view of the ArUco marker and wall.
+
+   - policy:   IMU-like vector, shape (num_envs, 10):
+               [0:3]   lin_vel_b     linear velocity in body frame
+               [3:6]   ang_vel_b     angular velocity in body frame
+               [6:10]  last_action   previous [thrust, roll_rate, pitch_rate, yaw_rate]
+
+   - privileged: Same 17-D teacher observation as above, available during training
+                 for the critic or distillation, but not required at deployment.
+
+3) Full-State Logging Vector (18-dim)
+   Returned under the key "full_state" for evaluation and plotting:
+
+   [0:3]   quadrotor position in world frame
+   [3:7]   orientation quaternion [x, y, z, w]
+   [7:10]  linear velocity in body frame
+   [10:13] angular velocity in body frame
+   [13:17] last_action [thrust, roll_rate, pitch_rate, yaw_rate]
+   [17]    distance to ArUco hover point
+
+   Total: 18 dims.
 """
-
 
 from __future__ import annotations
 
@@ -44,6 +78,8 @@ from isaaclab.utils.math import (
     subtract_frame_transforms,
     matrix_from_quat,
 )
+from isaaclab.sensors import Camera, CameraCfg, TiledCamera, TiledCameraCfg
+
 # Robot asset
 from configs.quadrotor_asset import QUADROTOR_CFG
 
@@ -76,7 +112,7 @@ def get_replicator():
 class ArucoHoverEnvWindow(BaseEnvWindow):
     """Minimal UI window shown in the Isaac Lab viewport."""
 
-    def __init__(self, env: "ArucoHoverEnv", window_name: str = "IsaacLab"):
+    def __init__(self, env, window_name: str = "IsaacLab"):
         super().__init__(env, window_name)
         with self.ui_window_elements["main_vstack"]:
             with self.ui_window_elements["debug_frame"]:
@@ -107,7 +143,8 @@ class ArucoHoverEnvCfg(DirectRLEnvCfg):
 
     # ---------- Action / observation sizes ----------------------------------
     action_space: int = 4      # [collective_thrust, roll_rate, pitch_rate, yaw_rate]
-    observation_space: int = 17
+    # observation_space: int = 17
+    observation_space: int = 20      # was 17 — +3 for marker direction vector
     state_space: int = 0
 
     num_actions: int = action_space
@@ -120,6 +157,9 @@ class ArucoHoverEnvCfg(DirectRLEnvCfg):
     sim: SimulationCfg = SimulationCfg(
         dt=1.0 / sim_rate_hz,
         render_interval=decimation,
+        render=sim_utils.RenderCfg(
+           rendering_mode="performance",
+        ),
         physics_material=sim_utils.RigidBodyMaterialCfg(
             friction_combine_mode="multiply",
             restitution_combine_mode="multiply",
@@ -156,19 +196,19 @@ class ArucoHoverEnvCfg(DirectRLEnvCfg):
         prim_path="/World/envs/env_.*/Robot"
     )
 
-    # Physical parameters â€” Crazyflie 2.1 defaults
-    mass: float = 0.027          # kg
-    Ixx: float = 1.4e-5          # kg.m^2
-    Iyy: float = 1.4e-5
-    Izz: float = 2.17e-5
-    thrust_to_weight: float = 1.8
-    arm_length: float = 0.046    # m, centre-to-motor
+    # Physical parameters Crazyflie 2.1 defaults
+    mass: float = 0.041         # kg
+    Ixx = 1.5417e-5             # kg.m^2
+    Iyy = 1.5904e-5
+    Izz = 2.869e-5
+    thrust_to_weight: float = 2.2
+    arm_length: float = 0.043    # m, centre-to-motor
     k_eta: float = 2.3e-8        # thrust coefficient [N / (rad/s)^2]
     k_m: float = 7.8e-10         # reaction-torque coefficient
     tau_m: float = 0.005         # motor first-order time constant [s]
     motor_speed_min: float = 0.0
     motor_speed_max: float = 2500.0
-    init_motor_speed: float = 1788.53  # rad/s â€” near hover equilibrium
+    init_motor_speed: float = 1788.53  # rad/s near hover equilibrium
 
     # ---------- CTBR inner-loop PD gains ----------
     control_mode: str = "CTBR"
@@ -184,11 +224,21 @@ class ArucoHoverEnvCfg(DirectRLEnvCfg):
     hover_distance: float = 1.5    # [m] desired standoff
     marker_height: float = 1.5     # [m] marker centre height above ground
 
-    # ---------- Initialisation noise ----------
-    init_pos_noise: list = [0.3, 0.3, 0.3]      # +-m around hover point
-    init_vel_noise: list = [0.2, 0.2, 0.2]      # +-m/s
-    init_ang_vel_noise: list = [0.3, 0.3, 0.1]  # +-rad/s
-    init_yaw_noise: float = 0.5                  # +-rad
+    # ---------- Curriculum for init noise (yaw / position) ----------
+    curriculum_enabled: bool = True
+    init_yaw_noise_start: float = 0.15
+    init_yaw_noise_end: float = 1.2
+    init_pos_noise_start: list = [0.15, 0.15, 0.15]
+    init_pos_noise_end: list = [0.4, 0.4, 0.4]
+    init_vel_noise: float = 0.1
+    init_ang_vel_noise: float = 0.1
+
+    # Performance-based curriculum thresholds
+    curriculum_step_size: float = 0.05        # fraction of [start, end] range advanced per promotion
+    curriculum_alignment_threshold: float = 0.85   # mean alignment_score needed to advance
+    curriculum_proximity_threshold: float = 0.7    # mean (gated) proximity reward needed to advance
+    curriculum_demotion_factor: float = 0.5   # how much to step back on regression (vs step forward)
+    curriculum_eval_window: int = 20          # number of resets to average performance over before judging
 
     # ---------- Domain randomisation (multiplicative, fraction of nominal) ----------
     dr_dict: dict = {
@@ -212,23 +262,71 @@ class ArucoHoverEnvCfg(DirectRLEnvCfg):
     # ---------- Reward weights ----------
     w_alive: float = 0.02            # survival bonus per step
     w_proximity: float = 3.0         # Gaussian proximity scale
-    proximity_sigma: float = 0.5     # Gaussian std [m]
+    proximity_sigma: float = 1.0    # Gaussian std [m]
     w_lin_vel: float = 0.05          # linear velocity penalty weight
     w_ang_vel: float = 0.02          # angular velocity penalty weight
-    w_orientation: float = 0.5       # facing-error (1 - cos theta) weight
+    w_orientation: float = 1.0       # facing-error (1 - cos theta) weight
+    alignment_power: int = 2         # exponent for the gating term
     w_action_rate: float = 0.10      # action-delta (jerk) penalty weight
 
     # ---------- Termination thresholds ----------
-    max_pos_error: float = 3.0      # [m] from hover point
-    max_tilt_deg: float = 90.0      # [deg] tilt limit
+    max_pos_error: float = 4.0      # [m] from hover point
+    max_tilt_deg: float = 75.0      # [deg] tilt limit
     min_height: float = 0.10        # [m] below this -> terminated
+
+    # ---------- Onboard RGB camera ----------
+    # camera: CameraCfg = CameraCfg(
+    #     prim_path="/World/envs/env_.*/Robot/Camera",
+    #     update_period=1.0 / policy_rate_hz,   # same as policy rate
+    #     width=64,
+    #     height=64,
+    #     data_types=["rgb"],
+    #     spawn=sim_utils.PinholeCameraCfg(
+    #         focal_length=24.0,
+    #         focus_distance=400.0,
+    #         horizontal_aperture=20.955,
+    #         clipping_range=(0.1, 20.0),
+    #     ),
+    #     offset=CameraCfg.OffsetCfg(
+    #         pos=(0.0, 0.0, 0.0),
+    #         rot=(1.0, 0.0, 0.0, 0.0),      # facing +Z in ROS convention
+    #         convention="ros",
+    #     ),
+    # )
+
+    camera: TiledCameraCfg = TiledCameraCfg(
+        prim_path="/World/envs/env_.*/Robot/Camera",
+        update_period=1.0 / policy_rate_hz,
+        width=128,
+        height=128,
+        data_types=["rgb"],
+        spawn=sim_utils.PinholeCameraCfg(
+            focal_length=24.0,
+            focus_distance=400.0,
+            horizontal_aperture=20.955,
+            clipping_range=(0.1, 20.0),
+        ),
+        offset=TiledCameraCfg.OffsetCfg(
+            pos=(0.0, 0.0, 0.0),
+            # rot=(1.0, 0.0, 0.0, 0.0),
+            rot=(0.7071, 0.0, 0.7071, 0.0),
+            convention="ros",
+        ),
+    )
 
     # ---------- Misc ----------
     scale_reward_with_time: bool = True  # multiply rewards by step_dt
     action_history_length: int = 1       # reserved for DAgger extension
     seed: int = 0
 
-class ArucoHoverEnv(DirectRLEnv):
+@configclass
+class ArucoHoverStudentEnvCfg(ArucoHoverEnvCfg):
+    """Student distillation cfg — spawns at max difficulty from the start."""
+    curriculum_enabled: bool = False
+    init_pos_noise: list = [0.4, 0.4, 0.4]   # ← no field() needed
+    init_yaw_noise: float = 1.2
+
+class ArucoHoverTeacherEnv(DirectRLEnv):
     """
     Vectorised Isaac Lab environment for the ArUco marker hover task.
 
@@ -251,6 +349,7 @@ class ArucoHoverEnv(DirectRLEnv):
         # Hover target in world frame — set properly in _reset_idx once
         # env_origins are available from the terrain.
         self._hover_point_w = torch.zeros(self.num_envs, 3, device=self.device)
+        self._marker_point_w = torch.zeros(self.num_envs, 3, device=self.device)
 
         # ---------- Actions / control buffers ----------
         self._actions          = torch.zeros(self.num_envs, 4, device=self.device)
@@ -306,6 +405,13 @@ class ArucoHoverEnv(DirectRLEnv):
         self._body_id = self._robot.find_bodies("body")[0]
 
         self.set_debug_vis(self.cfg.debug_vis)
+
+        # ---------- Performance-based curriculum state ----------
+        self._curriculum_level = torch.tensor(0.0, device=self.device)  # scalar in [0, 1], shared across envs
+        self._curriculum_alignment_buf = torch.zeros(self.cfg.curriculum_eval_window, device=self.device)
+        self._curriculum_proximity_buf = torch.zeros(self.cfg.curriculum_eval_window, device=self.device)
+        self._curriculum_buf_idx = 0
+        self._curriculum_buf_filled = False
 
     # ---------- MOTOR ALLOCATION ----------
     def _build_motor_allocation(self):
@@ -809,45 +915,135 @@ class ArucoHoverEnv(DirectRLEnv):
         self._robot.set_external_force_and_torque(
             self._thrust, self._moment, body_ids=self._body_id
         )
+    
+    def _get_curriculum_noise(self) -> tuple[torch.Tensor, float]:
+        """
+        Returns (pos_noise_tensor, yaw_noise_scalar) interpolated between
+        start/end values according to self._curriculum_level in [0, 1].
+        Level is updated by _update_curriculum() based on rolling performance,
+        not elapsed steps.
+        """
+        if not self.cfg.curriculum_enabled:
+            # Use max-difficulty noise so student sees diverse spawn states
+            return torch.tensor(self.cfg.init_pos_noise_end, device=self.device), self.cfg.init_yaw_noise_end
+
+        level = self._curriculum_level.item()
+
+        pos_start = torch.tensor(self.cfg.init_pos_noise_start, device=self.device)
+        pos_end   = torch.tensor(self.cfg.init_pos_noise_end, device=self.device)
+        pos_noise = pos_start + level * (pos_end - pos_start)
+
+        yaw_noise = (
+            self.cfg.init_yaw_noise_start
+            + level * (self.cfg.init_yaw_noise_end - self.cfg.init_yaw_noise_start)
+        )
+        return pos_noise, yaw_noise
+    
+    def _update_curriculum(self, env_ids: torch.Tensor):
+        """
+        Performance-gated curriculum update. Called once per reset batch.
+        Tracks rolling mean of (alignment, proximity) episode-average reward
+        components; promotes difficulty when both exceed threshold over a
+        window of resets, demotes (partially) if performance regresses hard.
+        """
+        if not self.cfg.curriculum_enabled:
+            return
+
+        # Per-episode means for the envs that just reset, normalised the same
+        # way as the logged Episode_Reward/* extras (divide by episode length).
+        mean_alignment = (
+            self._episode_sums["orientation"][env_ids].mean() / self.max_episode_length_s
+        ) / max(self.cfg.w_orientation, 1e-6)   # undo the w_orientation scale -> back to [0,1] alignment_score
+        mean_proximity = (
+            self._episode_sums["proximity"][env_ids].mean() / self.max_episode_length_s
+        ) / max(self.cfg.w_proximity, 1e-6)     # undo the w_proximity scale -> rough [0,1] proxy
+
+        # Push into rolling buffers
+        idx = self._curriculum_buf_idx % self.cfg.curriculum_eval_window
+        self._curriculum_alignment_buf[idx] = mean_alignment
+        self._curriculum_proximity_buf[idx] = mean_proximity
+        self._curriculum_buf_idx += 1
+        if self._curriculum_buf_idx >= self.cfg.curriculum_eval_window:
+            self._curriculum_buf_filled = True
+
+        if not self._curriculum_buf_filled:
+            return   # not enough data yet to judge performance
+
+        avg_alignment = self._curriculum_alignment_buf.mean()
+        avg_proximity = self._curriculum_proximity_buf.mean()
+
+        if (avg_alignment > self.cfg.curriculum_alignment_threshold
+                and avg_proximity > self.cfg.curriculum_proximity_threshold):
+            # Promote: advance level, reset window so next judgment uses fresh data
+            self._curriculum_level = torch.clamp(
+                self._curriculum_level + self.cfg.curriculum_step_size, 0.0, 1.0
+            )
+            self._curriculum_buf_filled = False
+            self._curriculum_buf_idx = 0
+        elif avg_alignment < self.cfg.curriculum_alignment_threshold * 0.5:
+            # Regression: performance collapsed at current difficulty, step back
+            self._curriculum_level = torch.clamp(
+                self._curriculum_level - self.cfg.curriculum_step_size * self.cfg.curriculum_demotion_factor,
+                0.0, 1.0,
+            )
+            self._curriculum_buf_filled = False
+            self._curriculum_buf_idx = 0
 
     def _get_observations(self) -> dict:
         """
-        Returns a dict with key "policy" containing the 17-dim observation.
+        Returns a dict with key "policy" containing the 20-dim observation.
 
         All quantities are in the BODY frame to make the obs position-invariant.
+        [0:3]   pos_err_b        hover point minus drone position, body frame
+        [3:6]   lin_vel_b
+        [6:9]   ang_vel_b
+        [9:12]  grav_vec_b
+        [12:15] marker_dir_b     unit vector toward the ArUco marker, body frame  <-- NEW
+        [15:19] last_action
+        [19]    dist_scalar
         """
         pos_w = self._robot.data.root_pos_w    # (N, 3) world pos
         ori_w = self._robot.data.root_quat_w   # (N, 4) wxyz quaternion
         lv_w  = self._robot.data.root_lin_vel_w
-        av_b  = self._robot.data.root_ang_vel_b  # already in body frame
+        av_b  = self._robot.data.root_ang_vel_b
 
-        # [0:3] Position error rotated into body frame
-        pos_err_w = self._hover_point_w - pos_w              # (N, 3)
-        pos_err_b = quat_apply_inverse(ori_w, pos_err_w)     # (N, 3)
+        # [0:3] Position error rotated into body frame (hover point, NOT marker)
+        pos_err_w = self._hover_point_w - pos_w
+        pos_err_b = quat_apply_inverse(ori_w, pos_err_w)
 
         # [3:6] Linear velocity in body frame
-        lin_vel_b = quat_apply_inverse(ori_w, lv_w)          # (N, 3)
+        lin_vel_b = quat_apply_inverse(ori_w, lv_w)
 
         # [9:12] Projected gravity vector in body frame
-        grav_b = quat_apply_inverse(ori_w, self._grav_unit_w)  # (N, 3)
+        grav_b = quat_apply_inverse(ori_w, self._grav_unit_w)
 
-        # [16] Scalar distance (used as curriculum progress proxy)
-        dist = torch.linalg.norm(pos_err_w, dim=-1, keepdim=True)  # (N, 1)
+        # ---- NEW: direction-to-marker vector, body frame --------------------
+        # Marker world position is fixed per-env: hover point + hover_distance
+        # along local +X (this matches how the marker is spawned in _setup_scene,
+        # at wall_x_pos - 0.03, i.e. hover_distance ahead of the hover point).
+        marker_dir_w = self._marker_point_w - pos_w           # (N, 3) drone -> marker
+        marker_dist  = torch.linalg.norm(marker_dir_w, dim=-1, keepdim=True).clamp(min=1e-6)
+        marker_dir_w_unit = marker_dir_w / marker_dist
+        marker_dir_b = quat_apply_inverse(ori_w, marker_dir_w_unit)  # (N, 3) unit vector, body frame
+
+        # [16] Scalar distance to HOVER POINT (curriculum proxy, unchanged semantics)
+        dist = torch.linalg.norm(pos_err_w, dim=-1, keepdim=True)
 
         obs = torch.cat([
             pos_err_b,              # 3  -> [0:3]
             lin_vel_b,              # 3  -> [3:6]
             av_b,                   # 3  -> [6:9]
             grav_b,                 # 3  -> [9:12]
-            self._previous_action,  # 4  -> [12:16]
-            dist,                   # 1  -> [16]
-        ], dim=-1)  # (N, 17)
+            marker_dir_b,           # 3  -> [12:15]  NEW
+            self._previous_action,  # 4  -> [15:19]
+            dist,                   # 1  -> [19]
+        ], dim=-1)  # (N, 20)
 
-        # Full world-frame state for logging/eval
+        # Full world-frame state for logging/eval (unchanged, still 18-D)
         full_state = torch.cat([
-            pos_w, 
-            ori_w, 
-            lv_w, 
+            pos_w,
+            ori_w,
+            lv_w,
             av_b,
             self._previous_action,
             dist,
@@ -857,76 +1053,85 @@ class ArucoHoverEnv(DirectRLEnv):
 
     def _get_rewards(self) -> torch.Tensor:
         """
-        Six fully-vectorised reward terms (no Python loops over envs):
+        Reward terms with alignment-gated proximity:
 
         r_t = w_alive
-            + w_prox * exp( -||delta_p||^2 / (2 * sigma^2) )
+            + alignment_score^power * w_prox * exp( -||delta_p||^2 / (2*sigma^2) )
             - w_vlin * ||v_body||
             - w_vang * ||omega_body||
-            - w_ori  * (1 - cos(theta_facing))
+            + w_ori * alignment_score                      # BONUS, not penalty
             - w_rate * ||a_t - a_{t-1}||
 
-        All terms are scaled by step_dt so the magnitude is independent of
-        the policy frequency (same reward per second regardless of decimation).
+        alignment_score = max(0, cos_theta)   where cos_theta is between
+        body-X axis and the unit vector pointing at the ArUco marker.
+        Gating means proximity reward is ~zero unless the drone is looking
+        at the marker; the bonus term independently rewards good alignment
+        even before the drone has closed the distance.
         """
         pos_w = self._robot.data.root_pos_w
         ori_w = self._robot.data.root_quat_w
         lv_w  = self._robot.data.root_lin_vel_w
         av_b  = self._robot.data.root_ang_vel_b
 
-        # --------------Term 1: Survival bonus----------------------------------- 
+        # --------------Term 1: Survival bonus-----------------------------------
         r_alive = torch.full(
             (self.num_envs,), self.cfg.w_alive, device=self.device
         )
 
-        # --------------Term 2: Gaussian proximity reward------------------------ 
-        pos_err_w  = self._hover_point_w - pos_w          # (N, 3)
-        dist_sq    = (pos_err_w ** 2).sum(dim=-1)         # (N,)
+        # --------------Shared: alignment to ACTUAL marker direction-------------
+        # (NOT the static world +X target used previously — this now tracks the
+        #  true marker position, so curriculum-randomised yaw/position still
+        #  produces a correct alignment signal.)
+        marker_dir_w = self._marker_point_w - pos_w                    # (N, 3)
+        marker_dist  = torch.linalg.norm(marker_dir_w, dim=-1, keepdim=True).clamp(min=1e-6)
+        marker_dir_w_unit = marker_dir_w / marker_dist                 # (N, 3)
+
+        R = matrix_from_quat(ori_w)             # (N, 3, 3)
+        body_x_w = R[:, :, 0]                   # (N, 3) body-X axis in world frame
+
+        cos_theta = (body_x_w * marker_dir_w_unit).sum(dim=-1).clamp(-1.0, 1.0)  # (N,)
+        alignment_score = cos_theta.clamp(min=0.0) ** self.cfg.alignment_power  # (N,) in [0, 1]
+
+        # --------------Term 2: Gaussian proximity reward, GATED by alignment----
+        pos_err_w  = self._hover_point_w - pos_w          # (N, 3) — still hover point, not marker
+        dist_sq    = (pos_err_w ** 2).sum(dim=-1)
         sigma_sq   = self.cfg.proximity_sigma ** 2
-        r_proximity = self.cfg.w_proximity * torch.exp(
+        r_proximity_raw = self.cfg.w_proximity * torch.exp(
             -dist_sq / (2.0 * sigma_sq)
         )
+        r_proximity = alignment_score * r_proximity_raw   # zero unless facing marker
 
-        # --------------Term 3: Linear velocity penalty-------------------------- 
+        # --------------Term 3: Linear velocity penalty---------------------------
         lin_vel_b = quat_apply_inverse(ori_w, lv_w)
         p_lin_vel = self.cfg.w_lin_vel * torch.linalg.norm(lin_vel_b, dim=-1)
 
-        # --------------Term 4: Angular velocity penalty------------------------- 
+        # --------------Term 4: Angular velocity penalty---------------------------
         p_ang_vel = self.cfg.w_ang_vel * torch.linalg.norm(av_b, dim=-1)
 
-        # --------------Term 5: Orientation / facing error----------------------- 
-        # The wall is at +X in local env frame. Drone faces the marker when
-        # its body-X axis points toward -X (world). INCORRECT
-        # R[:,  :, 0] = first column of rotation matrix = body-X in world frame.
-        R = matrix_from_quat(ori_w)             # (N, 3, 3)
-        body_x_w = R[:, :, 0]                   # (N, 3)
-        # target   = torch.tensor([-1.0, 0.0, 0.0], device=self.device)
-        target   = torch.tensor([1.0, 0.0, 0.0], device=self.device)
-        cos_theta   = (body_x_w * target).sum(dim=-1).clamp(-1.0, 1.0)  # (N,)
-        p_orientation = self.cfg.w_orientation * (1.0 - cos_theta)
+        # --------------Term 5: Orientation BONUS (was penalty)-------------------
+        r_orientation = self.cfg.w_orientation * alignment_score   # positive bonus, no longer (1 - cos)
 
-        # --------------Term 6: Action-rate (jerk) penalty----------------------- 
-        action_delta  = self._actions - self._previous_action  # (N, 4)
+        # --------------Term 6: Action-rate (jerk) penalty------------------------
+        action_delta  = self._actions - self._previous_action
         p_action_rate = self.cfg.w_action_rate * torch.linalg.norm(
             action_delta, dim=-1
         )
 
-        # --------------Aggregate----------------------------------------------- 
+        # --------------Aggregate---------------------------------------------------
         dt = self.step_dt if self.cfg.scale_reward_with_time else 1.0
 
         rewards = {
-            "alive":        r_alive       * dt,
-            "proximity":    r_proximity   * dt,
-            "lin_vel":     -p_lin_vel     * dt,
-            "ang_vel":     -p_ang_vel     * dt,
-            "orientation": -p_orientation * dt,
-            "action_rate": -p_action_rate * dt,
+            "alive":        r_alive        * dt,
+            "proximity":    r_proximity    * dt,
+            "lin_vel":     -p_lin_vel      * dt,
+            "ang_vel":     -p_ang_vel      * dt,
+            "orientation":  r_orientation  * dt,   # NOTE: now positive, sign flipped from before
+            "action_rate": -p_action_rate  * dt,
         }
 
         for k, v in rewards.items():
             self._episode_sums[k] += v
 
-        # Update previous action AFTER computing the delta
         self._previous_action = self._actions.clone()
 
         return sum(rewards.values())
@@ -1043,17 +1248,20 @@ class ArucoHoverEnv(DirectRLEnv):
             env_ids = self._robot._ALL_INDICES
 
         # --------------1. Episode logging-------------------------------------
+        self._update_curriculum(env_ids)   # NEW — must run before sums are zeroed below
+
         extras: dict = {}
         for key in self._episode_sums:
             avg = self._episode_sums[key][env_ids].mean()
             extras[f"Episode_Reward/{key}"] = avg / self.max_episode_length_s
             self._episode_sums[key][env_ids] = 0.0
-        extras["Episode_Termination/died"]    = (
+        extras["Episode_Termination/died"] = (
             self.reset_terminated[env_ids].sum().item()
         )
         extras["Episode_Termination/timeout"] = (
             self.reset_time_outs[env_ids].sum().item()
         )
+        extras["Curriculum/level"] = self._curriculum_level.item()   # NEW — log it
         self.extras.setdefault("log", {}).update(extras)
 
         # --------------2. Compute world-frame hover point for each env--------------------------
@@ -1065,7 +1273,16 @@ class ArucoHoverEnv(DirectRLEnv):
             device=self.device,
         )
         self._hover_point_w[env_ids] = (
-            self._terrain.env_origins[env_ids] + local_hover
+                    self._terrain.env_origins[env_ids] + local_hover
+                )
+        local_marker = torch.tensor(
+            [self.cfg.wall_x_pos - 0.03,   # matches marker spawn offset in _setup_scene
+            0.0,
+            self.cfg.marker_height],
+            device=self.device,
+        )
+        self._marker_point_w[env_ids] = (
+            self._terrain.env_origins[env_ids] + local_marker
         )
 
         # --------------3. Robot initial state-----------------------------------
@@ -1082,16 +1299,18 @@ class ArucoHoverEnv(DirectRLEnv):
         default_root = self._robot.data.default_root_state[env_ids].clone()
 
         # Position = hover point + uniform noise
+        curriculum_pos_noise, curriculum_yaw_noise = self._get_curriculum_noise()
         pos_noise = (
             torch.rand(n, 3, device=self.device) * 2.0 - 1.0
-        ) * torch.tensor(self.cfg.init_pos_noise, device=self.device)
-        default_root[:, :3] = self._hover_point_w[env_ids] + pos_noise
+        ) * curriculum_pos_noise
+
+        default_root[:, 0:3] = self._hover_point_w[env_ids] + pos_noise
 
         # Orientation: yaw rotated pi (facing -x) + small yaw noise
         base_yaw  = torch.full((n,), 0.0, device=self.device)
         yaw_noise = (
             torch.rand(n, device=self.device) * 2.0 - 1.0
-        ) * self.cfg.init_yaw_noise
+        ) * curriculum_yaw_noise
         yaw_total = base_yaw + yaw_noise
         # wxyz pure-yaw quaternion: w=cos(y/2), x=0, y=0, z=sin(y/2)
         default_root[:, 3] = torch.cos(yaw_total / 2.0)
@@ -1130,9 +1349,203 @@ class ArucoHoverEnv(DirectRLEnv):
         self._previous_action[env_ids]  = 0.0
         self._previous_omega_err[env_ids] = 0.0
 
-                # --------------6. Domain randomisation-----------------------------------
+        # --------------6. Domain randomisation-----------------------------------
         self._domain_randomise(env_ids)
 
         # --------------7. Visual domain randomisation (Phase 2 student robustness) --------------
         self._randomise_visuals(env_ids)          # lights, ArUco tint, etc.
         self._randomize_wall_textures(env_ids)    # per-env wall textures via Replicator
+
+
+class ArucoHoverStudentEnv(ArucoHoverTeacherEnv):
+    """Visual + IMU student environment for ArUco hover.
+
+    Observations:
+      - images:     (N, 3, H, W) RGB from onboard camera, float32 in [0, 1]
+      - policy:     IMU-like vector [lin_vel_b, ang_vel_b, last_action] with noise/bias
+      - privileged: same 17-D teacher observation (for critic/distillation)
+      - full_state: 18-D logging vector (pos, quat, vel, last_action, dist)
+    """
+
+    cfg: ArucoHoverEnvCfg  # shared config
+
+    def __init__(self, cfg: ArucoHoverEnvCfg, render_mode: str | None = None, **kwargs):
+        # Reuse all teacher initialization: physics, rewards, DR, etc.
+        super().__init__(cfg, render_mode, **kwargs)
+
+        # Teacher env sets up robot, walls, DR, etc.
+        #super().__init__(cfg, render_mode, **kwargs)
+
+        # Camera will be created in _setup_scene and managed by the scene
+        #self._camera = None
+
+        # IMU bias (accel[3] + gyro[3]) per env, sampled at reset
+        self._imu_bias = torch.zeros(self.num_envs, 6, device=self.device)
+    
+    def _setup_scene(self):
+        """Setup teacher scene, then attach onboard camera sensor."""
+        # 1. Let teacher create robot, walls, terrain, lights, etc.
+        super()._setup_scene()
+
+        # 2. Create camera sensor using shared cfg
+        # self._camera = Camera(self.cfg.camera)
+        self._camera = TiledCamera(self.cfg.camera)
+
+        # 3. Register camera with scene so InteractiveScene.reset() manages it
+        self.scene.sensors["onboard_camera"] = self._camera
+
+
+    # --------------------------------------------------------------------------
+    # Resets
+    # --------------------------------------------------------------------------
+
+    def _reset_idx(self, env_ids: torch.Tensor | None):
+        # Let teacher handle None / full reset logic
+        super()._reset_idx(env_ids)
+
+        if env_ids is None or len(env_ids) == self.num_envs:
+            env_ids = self._robot._ALL_INDICES
+
+        # IMU bias: accel bias (m/s^2), gyro bias (rad/s)
+        accel_bias_std = 0.1
+        gyro_bias_std  = 0.02
+
+        accel_bias = torch.randn(len(env_ids), 3, device=self.device) * accel_bias_std
+        gyro_bias  = torch.randn(len(env_ids), 3, device=self.device) * gyro_bias_std
+        self._imu_bias[env_ids] = torch.cat([accel_bias, gyro_bias], dim=-1)
+
+    # --------------------------------------------------------------------------
+    # Observation helpers
+    # --------------------------------------------------------------------------
+
+    def _compute_imu_obs(self) -> torch.Tensor:
+        """IMU-like observation with realistic noise and bias.
+
+        Returns [lin_vel_b, ang_vel_b, last_action] with:
+          - per-step Gaussian noise
+          - per-episode Gaussian bias (stored in self._imu_bias)
+        """
+        ori_w  = self._robot.data.root_quat_w
+        lv_w   = self._robot.data.root_lin_vel_w
+        av_b   = self._robot.data.root_ang_vel_b
+
+        lin_vel_b = quat_apply_inverse(ori_w, lv_w)
+        imu_clean = torch.cat([lin_vel_b, av_b], dim=-1)          # (N, 6)
+
+        noise_std = torch.tensor([0.05]*3 + [0.01]*3, device=self.device)
+        imu_noisy = imu_clean + self._imu_bias + torch.randn_like(imu_clean) * noise_std
+
+        grav_b = quat_apply_inverse(ori_w, self._grav_unit_w)     # (N, 3)
+
+        # Noisy position error — bridges teacher/student info gap
+        pos_w     = self._robot.data.root_pos_w
+        pos_err_w = self._hover_point_w - pos_w
+        pos_err_b = quat_apply_inverse(ori_w, pos_err_w)          # (N, 3)
+        pos_err_noisy = pos_err_b + torch.randn_like(pos_err_b) * 0.1  # 10cm std noise
+
+        return torch.cat([
+            imu_noisy,          # 6
+            grav_b,             # 3
+            pos_err_noisy,      # 3  ← NEW
+            self._previous_action,  # 4
+        ], dim=-1)              # (N, 16)
+
+    def _compute_teacher_obs(self) -> torch.Tensor:
+        """Reconstruct the 17-D privileged teacher observation.
+
+        Same semantics as your original teacher obs:
+          [0:3]   pos_error_b
+          [3:6]   lin_vel_b
+          [6:9]   ang_vel_b
+          [9:12]  grav_vec_b
+          [12:16] last_action
+          [16]    dist_scalar
+        """
+        pos_w = self._robot.data.root_pos_w
+        ori_w = self._robot.data.root_quat_w
+        lv_w  = self._robot.data.root_lin_vel_w
+        av_b  = self._robot.data.root_ang_vel_b
+
+        # Position error in body frame
+        pos_err_w = self._hover_point_w - pos_w
+        pos_err_b = quat_apply_inverse(ori_w, pos_err_w)
+
+        # Linear velocity in body frame
+        lin_vel_b = quat_apply_inverse(ori_w, lv_w)
+
+        # Gravity unit vector in body frame
+        grav_b = quat_apply_inverse(ori_w, self._grav_unit_w)
+
+        # Distance scalar
+        dist = torch.linalg.norm(self._hover_point_w - pos_w, dim=-1, keepdim=True)
+
+        marker_pos_w = self._hover_point_w.clone()
+        marker_pos_w[:, 0] += self.cfg.hover_distance 
+        marker_dir_w = marker_pos_w - pos_w
+        marker_dir_w = marker_dir_w / torch.linalg.norm(marker_dir_w, dim=-1, keepdim=True).clamp(min=1e-6)
+        marker_dir_b = quat_apply_inverse(ori_w, marker_dir_w)
+
+        teacher_obs = torch.cat(
+            [
+                pos_err_b,                # 3
+                marker_dir_b,             # 3 <-- ADD THIS
+                lin_vel_b,                # 3
+                av_b,                     # 3
+                grav_b,                   # 3
+                self._previous_action,    # 4
+                dist,                     # 1
+            ],
+            dim=-1,
+        )  # Now 20 dims
+        return teacher_obs
+
+    # --------------------------------------------------------------------------
+    # Main observation API
+    # --------------------------------------------------------------------------
+
+    def _get_observations(self) -> dict:
+        """Return full-image + IMU + privileged state + full_state."""
+
+        # 1) Camera RGB (may fail when renderer is out of resources)
+        rgb = None
+        if self._camera is not None:
+            rgb = self._camera.data.output.get("rgb", None)
+
+        if rgb is not None and rgb.ndim == 4:
+            # rgb: (N, H, W, C)
+            if rgb.shape[-1] == 4:
+                rgb = rgb[..., :3]
+            rgb = rgb.to(dtype=torch.float32) / 255.0
+            rgb = rgb.permute(0, 3, 1, 2).contiguous()  # (N, 3, H, W)
+        else:
+            # Fallback dummy images; current student policy ignores images anyway
+            N = self.num_envs
+            H, W = self.cfg.camera.height, self.cfg.camera.width
+            rgb = torch.zeros(N, 3, H, W, device=self.device)
+
+        # 2) IMU-like vector with noise/bias
+        imu_obs = self._compute_imu_obs()
+
+        # 3) Privileged teacher observation (clean)
+        teacher_obs = self._compute_teacher_obs()
+
+        # 4) Full-state logging vector (18-D), as your eval script expects
+        pos_w = self._robot.data.root_pos_w
+        ori_w = self._robot.data.root_quat_w
+        lv_w  = self._robot.data.root_lin_vel_w
+        av_b  = self._robot.data.root_ang_vel_b
+        dist  = torch.linalg.norm(self._hover_point_w - pos_w, dim=-1, keepdim=True)
+
+        full_state = torch.cat(
+            [pos_w, ori_w, lv_w, av_b, self._previous_action, dist],
+            dim=-1,
+        )  # (N, 18)
+
+        img_flat = rgb.view(self.num_envs, -1)                      # (N, 3*64*64) = (N, 12288)
+        policy_flat = torch.cat([imu_obs, img_flat], dim=-1)        # (N, 16 + 12288 = 12304)
+
+        return {
+            "policy":     policy_flat,
+            "teacher":    teacher_obs,
+            "full_state": full_state,
+        }

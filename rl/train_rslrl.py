@@ -38,6 +38,11 @@ parser.add_argument("--seed", type=int, default=None,
                     help="Seed used for the environment")
 parser.add_argument("--max_iterations", type=int, default=None,
                     help="RL Policy training iterations.")
+parser.add_argument("--teacher_checkpoint",type=str,
+                    default=None, help="Path to pretrained teacher .pt checkpoint for distillation. Ignored for normal PPO training.")
+# Add to argparse section:
+parser.add_argument("--use_gru",type=lambda x: x.lower() in ("true", "1", "yes"),default=None,
+                    help="Override whether the student uses a GRU. If unset, uses cfg default.")
 
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
@@ -45,9 +50,15 @@ cli_args.add_rsl_rl_args(parser)
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 
-# Always enable cameras for this visual training script
-args_cli.enable_cameras = True
-args_cli.headless = True  # still headless over SSH
+# Dynamically enable cameras only if we are training the Visual Student (Distillation)
+if args_cli.teacher_checkpoint is not None:
+    print("[INFO] Distillation mode detected: Enabling TiledCameras for Visual Student.")
+    args_cli.enable_cameras = True
+else:
+    print("[INFO] PPO Teacher mode detected: Disabling cameras for high-speed training.")
+    args_cli.enable_cameras = False
+
+args_cli.headless = True  # Always run headless over SSH
 
 # clear out sys.argv for Hydra
 sys.argv = [sys.argv[0]] + hydra_args
@@ -60,20 +71,31 @@ simulation_app = app_launcher.app
 # 2. Imports that require the app (omni.*, isaaclab.*, envs, etc.)
 # --------------------------------------------------------------------------------------
 
-import envs  # registers Isaac-QuadrotorHover-v0
+import envs
 from rsl_rl.runners import OnPolicyRunner
 
 from isaaclab.envs import DirectRLEnvCfg, ManagerBasedRLEnvCfg
 from isaaclab.utils.dict import print_dict
 from isaaclab.utils.io import dump_yaml
 
-import isaaclab_tasks  # noqa: F401
+import isaaclab_tasks  
 from isaaclab_tasks.utils import get_checkpoint_path
 from isaaclab_tasks.utils.hydra import hydra_task_config
 from isaaclab_rl.rsl_rl import (
     RslRlOnPolicyRunnerCfg,
     RslRlVecEnvWrapper,
 )
+
+from rsl_rl.runners import OnPolicyRunner
+import rsl_rl.runners.on_policy_runner as opr
+
+from envs.aruco_hover.agents.vision_student_teacher import VisionStudentTeacher
+opr.VisionStudentTeacher = VisionStudentTeacher
+
+from rl.aux_distillation import AuxDistillation
+import rsl_rl.algorithms as rsl_rl_algorithms
+rsl_rl_algorithms.Distillation = AuxDistillation   # patch the algorithms module
+opr.Distillation = AuxDistillation                 # patch the runner's imported reference
 
 # PyTorch perf flags
 torch.backends.cuda.matmul.allow_tf32 = True
@@ -98,6 +120,10 @@ def main(
     env_cfg.scene.num_envs = (
         args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
     )
+    
+    if args_cli.use_gru is not None:
+        agent_cfg.policy.use_gru = args_cli.use_gru
+
     agent_cfg.max_iterations = (
         args_cli.max_iterations
         if args_cli.max_iterations is not None
@@ -145,10 +171,18 @@ def main(
     # wrap around environment for rsl-rl
     env = RslRlVecEnvWrapper(env)
 
-    # create runner from rsl-rl
+    cfg_dict = agent_cfg.to_dict()
+
+    # DAgger beta-mixing params — passed through to AuxDistillation.__init__
+    # beta anneals 1.0→0.0 over 300 iters: teacher-only → student-only
+    if args_cli.teacher_checkpoint is not None:
+        cfg_dict["algorithm"]["beta_start"] = 1.0
+        cfg_dict["algorithm"]["beta_end"] = 0.0
+        cfg_dict["algorithm"]["beta_anneal_iters"] = 300
+
     runner = OnPolicyRunner(
         env,
-        agent_cfg.to_dict(),
+        cfg_dict,
         log_dir=log_dir,
         device=agent_cfg.device,
     )
@@ -156,7 +190,12 @@ def main(
     runner.add_git_repo_to_log(__file__)
 
     # save resume path before creating a new log_dir
-    if agent_cfg.resume:
+    if args_cli.teacher_checkpoint is not None:
+        # Distillation: load pretrained teacher weights
+        print(f"[INFO]: Loading teacher checkpoint from: {args_cli.teacher_checkpoint}")
+        runner.load(args_cli.teacher_checkpoint)
+    elif agent_cfg.resume:
+        # Normal PPO resume
         resume_path = get_checkpoint_path(
             log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint
         )
@@ -167,11 +206,79 @@ def main(
     dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
     dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
 
-    # run training
+    if args_cli.video:
+        import cv2, numpy as np
+        from pathlib import Path
+
+        drone_video_dir = Path(log_dir) / "videos" / "drone_pov"
+        drone_video_dir.mkdir(parents=True, exist_ok=True)
+
+        isaac_env = runner.env.env.unwrapped
+
+        writer = [None]
+        frame_count = [0]
+
+        original_step = isaac_env.step
+
+        def step_with_capture(action):
+            result = original_step(action)
+            if frame_count[0] >= args_cli.video_length:
+                return result
+
+            try:
+                rgb = isaac_env._camera.data.output.get("rgb", None)
+            except Exception:
+                return result
+
+            if rgb is None:
+                return result
+
+            # Debug print — only on first frame
+            if frame_count[0] == 0:
+                print(f"[CAM] dtype={rgb.dtype} min={rgb.min():.4f} max={rgb.max():.4f} shape={rgb.shape}")
+            
+            if frame_count[0] == 0:
+                import os
+                from PIL import Image
+                save_dir = os.path.expanduser("~/AerialCatching/videos")
+                os.makedirs(save_dir, exist_ok=True)
+                Image.fromarray(rgb[0].cpu().numpy()).save(os.path.join(save_dir, "frame0.png"))
+                # Image.fromarray(rgb[32].cpu().numpy()).save(os.path.join(save_dir, "frame32.png"))
+                print(f"[CAM] Saved frames to {save_dir}/frame0.png and frame32.png")
+
+            raw = rgb[0].cpu().numpy()
+            if raw.dtype != np.uint8:
+                raw = (raw * 255.0).clip(0, 255).astype(np.uint8)
+            frame_bgr = cv2.cvtColor(raw, cv2.COLOR_RGB2BGR)
+
+            if writer[0] is None:
+                h, w = frame_bgr.shape[:2]
+                fps = max(1, int(1.0 / (isaac_env.cfg.sim.dt * isaac_env.cfg.decimation)))
+                out_path = str(drone_video_dir / "drone_pov.mp4")
+                writer[0] = cv2.VideoWriter(
+                    out_path, cv2.VideoWriter_fourcc(*"mp4v"), fps, (w, h)
+                )
+
+            writer[0].write(frame_bgr)
+            frame_count[0] += 1
+            if frame_count[0] >= args_cli.video_length:
+                writer[0].release()
+                writer[0] = None
+                print(f"[VIDEO] Drone POV saved to {drone_video_dir}/drone_pov.mp4")
+
+            return result
+
+        isaac_env.step = step_with_capture
+
     runner.learn(
         num_learning_iterations=agent_cfg.max_iterations,
         init_at_random_ep_len=True,
     )
+
+    # flush (replace the existing flush block)
+    if args_cli.video and writer[0] is not None:
+        writer[0].release()
+        print(f"[VIDEO] Drone POV flushed.")
 
     env.close()
 
