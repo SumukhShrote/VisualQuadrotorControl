@@ -394,8 +394,9 @@ from isaaclab_rl.rsl_rl import (
 )
 
 import rsl_rl.runners.on_policy_runner as opr
-from envs.aruco_hover.agents.vision_student_teacher import VisionStudentTeacher
+from envs.aruco_hover.agents.vision_student_teacher import VisionStudentTeacher, VisionActorCritic
 opr.VisionStudentTeacher = VisionStudentTeacher
+opr.VisionActorCritic = VisionActorCritic
 
 from isaaclab.utils.io import load_yaml
 

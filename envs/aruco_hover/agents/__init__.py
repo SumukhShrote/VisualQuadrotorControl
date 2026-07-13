@@ -8,4 +8,4 @@ from isaaclab_tasks.utils import import_packages
 # Register agent config as entry point so hydra_task_config can find it
 from .rsl_rl_ppo_cfg import QuadrotorTeacherPPORunnerCfg, QuadrotorStudentPPORunnerCfg
 from .rsl_rl_distillation_cfg import QuadrotorStudentDistillationRunnerCfg
-from .vision_student_teacher import VisionStudentTeacher
+from .vision_student_teacher import VisionStudentTeacher, VisionActorCritic

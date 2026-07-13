@@ -325,9 +325,7 @@ class ArucoHoverEnvCfg(DirectRLEnvCfg):
 @configclass
 class ArucoHoverStudentEnvCfg(ArucoHoverEnvCfg):
     """Student distillation cfg — spawns at max difficulty from the start."""
-    curriculum_enabled: bool = False
-    init_pos_noise: list = [0.4, 0.4, 0.4]   # ← no field() needed
-    init_yaw_noise: float = 1.2
+    curriculum_enabled: bool = True
 
 class ArucoHoverTeacherEnv(DirectRLEnv):
     """
@@ -1623,6 +1621,7 @@ class ArucoHoverStudentEnv(ArucoHoverTeacherEnv):
         return {
             "policy":     policy_flat,
             "teacher":    teacher_obs,
+            "critic":     teacher_obs,
             "full_state": full_state,
             "bbox_gt":    self._compute_bbox_gt(),                  # (N, 5): [cx, cy, w, h, visible_flag]
         }

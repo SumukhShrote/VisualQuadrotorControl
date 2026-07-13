@@ -53,3 +53,14 @@ gym.register(
         "rsl_rl_cfg_entry_point": agents.rsl_rl_distillation_cfg.QuadrotorStudentDistillationRunnerCfg,
     },
 )
+
+# Asymmetric PPO fine-tuning task (vision+IMU actor, 20-D GT critic)
+gym.register(
+    id="Isaac-QuadrotorHoverAsymmetricPPO-v0",
+    entry_point="envs.aruco_hover.quadrotor_aruco_hover_env:ArucoHoverStudentEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": ArucoHoverStudentEnvCfg,
+        "rsl_rl_cfg_entry_point": agents.rsl_rl_ppo_cfg.QuadrotorAsymmetricPPORunnerCfg,
+    },
+)

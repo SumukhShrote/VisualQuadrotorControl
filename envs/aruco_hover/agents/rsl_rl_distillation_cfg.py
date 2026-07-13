@@ -30,7 +30,7 @@ class QuadrotorStudentDistillationRunnerCfg(RslRlOnPolicyRunnerCfg):
 
     policy: VisionStudentTeacherCfg = VisionStudentTeacherCfg(
         class_name="VisionStudentTeacher",
-        init_noise_std=0.1,
+        init_noise_std=0.01,
         student_hidden_dims=[128, 128],
         teacher_hidden_dims=[64, 64],
         activation="tanh",
