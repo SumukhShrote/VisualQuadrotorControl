@@ -7,10 +7,14 @@ from isaaclab_rl.rsl_rl.distillation_cfg import (
 
 
 @configclass
-class VisionStudentTeacherCfg(RslRlDistillationStudentTeacherCfg):
-    """Extends the base cfg with vision-specific fields."""
-    use_gru: bool = True
-    gru_hidden_size: int = 128
+class VisionStudentTeacherCfg(
+    RslRlDistillationStudentTeacherCfg
+):
+    use_gru: bool = False
+
+    history_length: int = 32
+    token_dim: int = 8
+    temporal_channels: int = 128
 
 
 @configclass
@@ -31,11 +35,16 @@ class QuadrotorStudentDistillationRunnerCfg(RslRlOnPolicyRunnerCfg):
     policy: VisionStudentTeacherCfg = VisionStudentTeacherCfg(
         class_name="VisionStudentTeacher",
         init_noise_std=0.01,
-        student_hidden_dims=[128, 128],
+
+        student_hidden_dims=[256, 256],
         teacher_hidden_dims=[64, 64],
-        activation="tanh",
-        use_gru=False,        # flip to True to enable GRU
-        gru_hidden_size=128,
+
+        activation="elu",
+        use_gru=False,
+
+        history_length=32,
+        token_dim=8,
+        temporal_channels=128,
     )
 
     algorithm: RslRlDistillationAlgorithmCfg = RslRlDistillationAlgorithmCfg(

@@ -1,344 +1,10 @@
-'''import argparse
-import sys
-from isaaclab.app import AppLauncher
-
-import math           
-import collections    
-
-# local imports
-from utils import cli_args  # isort: skip
-
-# add argparse arguments
-parser = argparse.ArgumentParser(description="Evaluate a trained RSL-RL policy.")
-parser.add_argument("--video", action="store_true", default=False, help="Record videos during evaluation.")
-parser.add_argument("--video_length", type=int, default=1000, help="Length of the recorded video (in steps).")
-parser.add_argument("--video_interval", type=int, default=2000, help="Interval between video recordings (in steps).")
-parser.add_argument("--disable_fabric", action="store_true", default=False, help="Disable fabric and use USD I/O operations.")
-parser.add_argument("--num_envs", type=int, default=1, help="Number of environments to simulate.")
-parser.add_argument("--task", type=str, default="Isaac-QuadrotorHover-v0", help="Name of the task.")
-parser.add_argument("--seed", type=int, default=0, help="Seed used for the environment")
-parser.add_argument("--save_prefix", type=str, default="", help="Prefix for saving files.")
-parser.add_argument("--follow_robot", type=int, default=-1, help="Follow robot index.")
-
-# append RSL-RL cli arguments
-cli_args.add_rsl_rl_args(parser)
-# append AppLauncher cli args
-AppLauncher.add_app_launcher_args(parser)
-args_cli, hydra_args = parser.parse_known_args()
-
-args_cli.enable_cameras = args_cli.video
-args_cli.headless = True  # make False to see the simulation
-
-# clear out sys.argv for Hydra
-sys.argv = [sys.argv[0]] + hydra_args
-
-# launch omniverse app
-app_launcher = AppLauncher(args_cli)
-simulation_app = app_launcher.app
-
-
-import os
-import time
-import yaml
-
-import gymnasium as gym
-import envs  # registers Isaac-QuadrotorHover-v0
-
-from rsl_rl.runners import OnPolicyRunner
-
-from isaaclab.utils.dict import print_dict
-
-import isaaclab_tasks  # noqa: F401
-from isaaclab.envs import DirectRLEnvCfg, ManagerBasedRLEnvCfg
-from isaaclab_tasks.utils.hydra import hydra_task_config
-from isaaclab_tasks.utils import get_checkpoint_path, parse_env_cfg
-from isaaclab_rl.rsl_rl import (
-    RslRlOnPolicyRunnerCfg,
-    RslRlVecEnvWrapper,
-    export_policy_as_jit,
-    export_policy_as_onnx,
-)
-
-import rsl_rl.runners.on_policy_runner as opr
-from envs.aruco_hover.agents.vision_student_teacher import VisionStudentTeacher
-opr.VisionStudentTeacher = VisionStudentTeacher
-
-from isaaclab.utils.io import load_yaml
-
-import numpy as np
-import torch
-
-
-@hydra_task_config(args_cli.task, "rsl_rl_cfg_entry_point")
-def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlOnPolicyRunnerCfg):
-
-    agent_cfg = cli_args.update_rsl_rl_cfg(agent_cfg, args_cli)
-    env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
-
-    # specify directory for logging experiments
-    log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
-    log_root_path = os.path.abspath(log_root_path)
-    print(f"[INFO] Loading experiment from directory: {log_root_path}")
-    resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run, agent_cfg.load_checkpoint)
-    print("Resume path: ", resume_path)
-    log_dir = os.path.dirname(resume_path)
-    print("Log dir: ", log_dir)
-
-    policy_path = log_dir
-
-    env_cfg.eval_mode = True
-    env_cfg.viewer.resolution = (1920, 1080)
-    env_cfg.seed = args_cli.seed
-    env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
-    agent_cfg.device = env_cfg.sim.device
-
-    # Restore reward scalars from saved params/env.yaml so eval matches training
-    if os.path.exists(os.path.join(log_dir, "params/env.yaml")):
-        with open(os.path.join(log_dir, "params/env.yaml")) as f:
-            hydra_cfg = yaml.load(f, Loader=yaml.UnsafeLoader)
-
-        for key in ("pos_distance_reward_scale", "pos_error_reward_scale",
-                    "lin_vel_reward_scale", "ang_vel_reward_scale",
-                    "hover_distance"):
-            if key in hydra_cfg:
-                setattr(env_cfg, key, hydra_cfg[key])
-
-    robot_index_prefix = ""
-
-    camera_mode = os.environ.get(
-        "EVAL_CAMERA_MODE",
-        "follow",
-    )
-
-    if camera_mode == "follow":
-
-        if args_cli.follow_robot >= 0:
-            env_cfg.viewer.eye = (-0.5, 0.5, 0.5)
-            env_cfg.viewer.lookat = (0.0, 0.0, 0.0)
-            env_cfg.viewer.origin_type = "asset_root"
-            env_cfg.viewer.env_index = args_cli.follow_robot
-            env_cfg.viewer.asset_name = "robot"
-
-            robot_index_prefix = (
-                f"_robot_{args_cli.follow_robot}"
-            )
-
-    elif camera_mode == "topdown":
-
-        env_cfg.viewer.eye = (0.5, 0.0, 8.0)
-        env_cfg.viewer.lookat = (0.5, 0.0, 1.5)
-        env_cfg.viewer.origin_type = "world"
-
-        robot_index_prefix = "_topdown"
-
-    elif camera_mode == "observer":
-
-        env_cfg.viewer.eye = (-2.0, -3.0, 2.0)
-        env_cfg.viewer.lookat = (1.5, 0.0, 1.5)
-        env_cfg.viewer.origin_type = "world"
-
-        robot_index_prefix = "_observer"
-
-    env_cfg.viewer.resolution = (1920, 1080)
-    print("\n\nUpdated env cfg: ", env_cfg)
-
-    save_prefix = args_cli.save_prefix
-    video_name = save_prefix + "_eval_video" + robot_index_prefix
-    video_folder_path = os.path.join(policy_path, "videos", "eval")
-
-    video_kwargs = {
-        "video_folder": video_folder_path,
-        "step_trigger": lambda step: step == 0,
-        "video_length": args_cli.video_length,
-        "name_prefix": video_name
-    }
-    envs = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array")
-    envs = gym.wrappers.RecordVideo(envs, **video_kwargs)
-    device = envs.unwrapped.device
-
-    # Load RL policy
-    envs = RslRlVecEnvWrapper(envs)  # This calls Reset!!
-    print(f"[INFO]: Loading model checkpoint from: {resume_path}")
-    ppo_runner = OnPolicyRunner(envs, agent_cfg.to_dict(), log_dir=None, device=agent_cfg.device)
-    ppo_runner.load(resume_path)
-
-    # obtain the trained policy for inference
-    agent = ppo_runner.get_inference_policy(device=envs.unwrapped.device)
-
-    # DEBUG
-    print(f"[DEBUG] agent type: {type(agent)}")
-    print(f"[DEBUG] policy type: {type(ppo_runner.alg.policy)}")
-    print(f"[DEBUG] has _last_marker before step: {hasattr(ppo_runner.alg.policy, '_last_marker')}")
-
-    # Also check camera access
-    isaac_env = envs_wrapped.unwrapped
-    print(f"[DEBUG] has _camera: {hasattr(isaac_env, '_camera')}")
-    if hasattr(isaac_env, '_camera') and isaac_env._camera is not None:
-        rgb = isaac_env._camera.data.output.get("rgb", None)
-        print(f"[DEBUG] rgb shape before first step: {rgb.shape if rgb is not None else None}")
-
-    # Export ONNX for Jetson Orin NX TensorRT conversion
-    export_model_dir = os.path.join(os.path.dirname(resume_path), "exported")
-    try:
-        export_policy_as_onnx(
-            ppo_runner.alg.policy,
-            normalizer=ppo_runner.obs_normalizer,
-            path=export_model_dir,
-            filename="teacher_policy.onnx",
-        )
-    except AttributeError as e:
-        print(f"[WARN] ONNX export skipped (custom recurrent policy not supported by exporter): {e}")
-
-    # RslRlVecEnvWrapper returns a tuple: (obs, extras)
-    obs, extras = envs.get_observations()
-    obs_dict = extras.get("observations", {})
-    full_state = obs_dict.get("full_state", None)
-    print("Starting obs: ", full_state)
-
-    max_steps = int(env_cfg.episode_length_s * env_cfg.policy_rate_hz)
-
-    full_state_size = obs_dict["full_state"].shape[1]
-    full_states  = torch.zeros((args_cli.num_envs, max_steps, full_state_size), dtype=torch.float32).to(device)
-    rewards      = torch.zeros((args_cli.num_envs, max_steps), dtype=torch.float32).to(device)
-    actions_log  = torch.zeros((args_cli.num_envs, max_steps, 4), dtype=torch.float32).to(device)
-
-    steps = 0
-    done = False
-    done_count = 0
-    times = []
-
-    with torch.no_grad():
-        while simulation_app.is_running():
-            print(f"[EVAL] policy obs shape: {obs_dict['policy'].shape}")
-            print(f"[EVAL] obs keys available: {list(obs_dict.keys())}")
-            # Also add this:
-            print(f"[EVAL] task: {args_cli.task}")
-            print(f"[EVAL] env type: {type(envs.unwrapped)}")
-            while steps < max_steps and not done:
-                full_states[:, steps, :] = obs_dict["full_state"]
-
-                start = time.time()
-                actions = agent(obs_dict["policy"])
-                actions_log[:, steps] = actions
-                times.append(time.time() - start)
-
-                # Wrapper returns 4 values: obs, reward, dones, extras
-                obs, reward, dones, extras = envs.step(actions)
-                done_count += dones.sum().item()
-                obs_dict = extras.get("observations", envs.unwrapped._get_observations())
-                info = extras
-                rewards[:, steps] = reward.detach()
-                steps += 1
-                print("Step: ", steps)
-                
-
-            print("Full states shape: ", full_states.shape)
-            torch.save(full_states, os.path.join(policy_path, save_prefix + "eval_full_states.pt"))
-            torch.save(rewards, os.path.join(policy_path, save_prefix + "eval_rewards.pt"))
-
-            print("Final Info: \n\n", info, "\n")
-            print("\nAverage inference time: ", np.mean(times))
-
-            # State slices for quadrotor hover (18-dim full_state):
-            # [0:3]   quad position (world)
-            # [3:7]   quaternion [x,y,z,w]
-            # [7:10]  linear velocity (body)
-            # [10:13] angular velocity (body)
-            # [13:17] last action [thrust, roll_rate, pitch_rate, yaw_rate]
-            # [17]    distance to ArUco marker
-            quad_pos     = full_states[args_cli.follow_robot, :-1, 0:3].cpu().numpy()
-            quad_vel     = full_states[args_cli.follow_robot, :-1, 7:10].cpu().numpy()
-            quad_ang_vel = full_states[args_cli.follow_robot, :-1, 10:13].cpu().numpy()
-            marker_dist  = full_states[args_cli.follow_robot, :-1, 17].cpu().numpy()
-
-            if args_cli.follow_robot >= 0:
-                import matplotlib.pyplot as plt
-                import isaaclab.utils.math as isaac_math_utils
-
-                quad_euler = isaac_math_utils.euler_xyz_from_quat(full_states[args_cli.follow_robot, :-1, 3:7])
-                quad_roll  = quad_euler[0].cpu().numpy()
-                quad_pitch = quad_euler[1].cpu().numpy()
-                quad_yaw   = quad_euler[2].cpu().numpy()
-
-                T = rewards.shape[1] - 1
-                x = np.arange(T) * (1 / env_cfg.policy_rate_hz)
-
-                save_path = video_folder_path + "/" + video_name + ".png"
-
-                fig = plt.figure(figsize=(10, 10))
-
-                plt.subplot(4, 3, 1)
-                plt.plot(x, quad_pos[:, 0], label="Quad X")
-                plt.legend(loc="best")
-                plt.subplot(4, 3, 2)
-                plt.plot(x, quad_pos[:, 1], label="Quad Y")
-                plt.legend(loc="best")
-                plt.subplot(4, 3, 3)
-                plt.plot(x, quad_pos[:, 2], label="Quad Z")
-                plt.plot(x, marker_dist, label="Marker dist", linestyle="--")
-                plt.axhline(1.5, color="gray", linestyle=":", label="Target 1.5 m")
-                plt.legend(loc="best")
-                plt.subplot(4, 3, 4)
-                plt.plot(x, quad_vel[:, 0], label="Quad Vel X")
-                plt.legend(loc="best")
-                plt.subplot(4, 3, 5)
-                plt.plot(x, quad_vel[:, 1], label="Quad Vel Y")
-                plt.legend(loc="best")
-                plt.subplot(4, 3, 6)
-                plt.plot(x, quad_vel[:, 2], label="Quad Vel Z")
-                plt.legend(loc="best")
-                plt.subplot(4, 3, 7)
-                plt.plot(x, quad_roll, label="Quad Roll")
-                plt.legend(loc="best")
-                plt.subplot(4, 3, 8)
-                plt.plot(x, quad_pitch, label="Quad Pitch")
-                plt.legend(loc="best")
-                plt.subplot(4, 3, 9)
-                plt.plot(x, quad_yaw, label="Quad Yaw")
-                plt.legend(loc="best")
-                plt.subplot(4, 3, 10)
-                plt.plot(x, quad_ang_vel[:, 0], label="Quad Ang Vel X")
-                plt.legend(loc="best")
-                plt.subplot(4, 3, 11)
-                plt.plot(x, quad_ang_vel[:, 1], label="Quad Ang Vel Y")
-                plt.legend(loc="best")
-                plt.subplot(4, 3, 12)
-                plt.plot(x, quad_ang_vel[:, 2], label="Quad Ang Vel Z")
-                plt.legend(loc="best")
-                plt.tight_layout()
-                plt.savefig(save_path)
-                print(f"Saved plot to {save_path}")
-                plt.close(fig)
-
-                # Plot actions
-                fig = plt.figure(figsize=(10, 10))
-                actions_np = actions_log.cpu().numpy()
-                act_labels = ["Thrust (norm.)", "Roll rate", "Pitch rate", "Yaw rate"]
-                for i, label in enumerate(act_labels):
-                    plt.subplot(2, 2, i + 1)
-                    plt.plot(x, actions_np[args_cli.follow_robot, :-1, i], label=label)
-                    plt.legend(loc="best")
-                plt.tight_layout()
-                save_path = video_folder_path + "/" + video_name + "_actions.png"
-                plt.savefig(save_path)
-                print(f"Saved actions plot to {save_path}")
-                plt.close(fig)
-
-            envs.close()
-            simulation_app.close()
-
-
-if __name__ == "__main__":
-    main()
-    simulation_app.close()
-'''
-
 import argparse
 import sys
 from isaaclab.app import AppLauncher
 
 import math
 import collections
+from pathlib import Path
 
 from utils import cli_args  # isort: skip
 
@@ -354,14 +20,23 @@ parser.add_argument("--seed", type=int, default=0, help="Seed used for the envir
 parser.add_argument("--save_prefix", type=str, default="", help="Prefix for saving files.")
 parser.add_argument("--follow_robot", type=int, default=-1, help="Follow robot index.")
 parser.add_argument("--debug_bbox", action="store_true", default=False, help="Draw GT bounding box on onboard camera video for debugging.")
-parser.add_argument("--debug_bbox_pred", action="store_true", default=False, help="Draw student-predicted bounding box (from policy._last_marker) on onboard camera video for debugging.")
+parser.add_argument("--debug_corners", action="store_true", default=False, help="Draw the latest four projected corners directly from the 32-step policy observation.")
 parser.add_argument("--use_gru", type=lambda x: x.lower() == "true", default=False, help="Use GRU temporal memory in student policy — must match the trained checkpoint.")
+parser.add_argument("--student_checkpoint", type=str, default=None)
+parser.add_argument("--curriculum_level", type=float, default=None, help=("Freeze evaluation reset difficulty at a value in [0, 1]."))
 
 cli_args.add_rsl_rl_args(parser)
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 
-args_cli.enable_cameras = args_cli.video
+# The current student environment still constructs a TiledCamera even though
+# the corners policy does not consume RGB. Keep camera support enabled until
+# camera construction is made optional in the environment.
+# RGB rendering is needed only when recording video.
+args_cli.enable_cameras = bool(
+    args_cli.video
+)
+
 args_cli.headless = True
 
 sys.argv = [sys.argv[0]] + hydra_args
@@ -394,9 +69,12 @@ from isaaclab_rl.rsl_rl import (
 )
 
 import rsl_rl.runners.on_policy_runner as opr
-from envs.aruco_hover.agents.vision_student_teacher import VisionStudentTeacher, VisionActorCritic
+from rl.corners_ppo import CornersAnchoredPPO
+import rsl_rl.algorithms as rsl_rl_algorithms
+from envs.aruco_hover.agents.vision_student_teacher import VisionStudentTeacher, VisionActorCritic, CornersTCNActorCritic
 opr.VisionStudentTeacher = VisionStudentTeacher
 opr.VisionActorCritic = VisionActorCritic
+opr.CornersTCNActorCritic = CornersTCNActorCritic
 
 from isaaclab.utils.io import load_yaml
 
@@ -433,11 +111,15 @@ class OnboardCameraRecorder:
         print(f"[OnboardRecorder] Writing to: {output_path}  "
               f"({self.out_w}x{self.out_h} @ {fps} fps)")
 
-    def write_frame(self, rgb_nhwc: torch.Tensor,
-                feature_map: torch.Tensor | None = None,
-                env_idx: int = 0,
-                bbox_gt: tuple | None = None,
-                bbox_pred: tuple | None = None):
+    def write_frame(
+        self,
+        rgb_nhwc: torch.Tensor,
+        feature_map: torch.Tensor | None = None,
+        env_idx: int = 0,
+        bbox_gt: tuple | None = None,
+        bbox_pred: tuple | None = None,
+        corners_obs=None,
+    ):
         """
         Args:
             rgb_nhwc:    (N, H, W, 3) uint8 from TiledCamera
@@ -526,6 +208,318 @@ class OnboardCameraRecorder:
                         (4, 20),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6,
                         (0, 140, 255), 2, cv2.LINE_AA)
+        
+        # ----------------------------------------------------------------------
+        # Projected-corner overlay from the exact policy observation
+        # ----------------------------------------------------------------------
+        if corners_obs is not None:
+            corners_array = np.asarray(
+                corners_obs,
+                dtype=np.float32,
+            ).reshape(4, 2)
+
+            # Preserve an image without projected-corner drawings for the zoom inset.
+            zoom_source = frame_bgr.copy()
+
+            # BGR colors.
+            corner_colors = [
+                (255, 0, 0),      # 0: blue
+                (0, 255, 255),    # 1: yellow
+                (0, 0, 255),      # 2: red
+                (255, 0, 255),    # 3: magenta
+            ]
+
+            # Position labels away from the center of the marker.
+            label_offsets = [
+                (-18, -8),
+                (8, -8),
+                (8, 18),
+                (-18, 18),
+            ]
+
+            pixel_points = [None, None, None, None]
+
+            for corner_index, (u_n, v_n) in enumerate(corners_array):
+                valid = (
+                    np.isfinite(u_n)
+                    and np.isfinite(v_n)
+                    and 0.0 <= u_n <= 1.0
+                    and 0.0 <= v_n <= 1.0
+                )
+
+                if not valid:
+                    continue
+
+                x_px = int(round(float(u_n) * (self.out_w - 1)))
+                y_px = int(round(float(v_n) * (self.out_h - 1)))
+
+                pixel_points[corner_index] = (x_px, y_px)
+
+            all_corners_valid = all(
+                point is not None
+                for point in pixel_points
+            )
+
+            # ------------------------------------------------------------------
+            # Small overlay on the complete onboard image
+            # ------------------------------------------------------------------
+            if all_corners_valid:
+                polygon = np.asarray(
+                    pixel_points,
+                    dtype=np.int32,
+                ).reshape(-1, 1, 2)
+
+                cv2.polylines(
+                    frame_bgr,
+                    [polygon],
+                    isClosed=True,
+                    color=(255, 255, 255),
+                    thickness=1,
+                    lineType=cv2.LINE_AA,
+                )
+
+            for corner_index, point in enumerate(pixel_points):
+                if point is None:
+                    continue
+
+                color = corner_colors[corner_index]
+
+                # Small cross instead of large overlapping circles.
+                cv2.drawMarker(
+                    frame_bgr,
+                    point,
+                    color,
+                    markerType=cv2.MARKER_CROSS,
+                    markerSize=8,
+                    thickness=1,
+                    line_type=cv2.LINE_AA,
+                )
+
+                label_x = point[0] + label_offsets[corner_index][0]
+                label_y = point[1] + label_offsets[corner_index][1]
+
+                cv2.putText(
+                    frame_bgr,
+                    str(corner_index),
+                    (label_x, label_y),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.45,
+                    color,
+                    1,
+                    cv2.LINE_AA,
+                )
+
+            valid_points = [
+                point
+                for point in pixel_points
+                if point is not None
+            ]
+
+            # ------------------------------------------------------------------
+            # Magnified marker inset
+            # ------------------------------------------------------------------
+            if valid_points:
+                point_array = np.asarray(
+                    valid_points,
+                    dtype=np.float32,
+                )
+
+                min_x = float(point_array[:, 0].min())
+                max_x = float(point_array[:, 0].max())
+                min_y = float(point_array[:, 1].min())
+                max_y = float(point_array[:, 1].max())
+
+                span_x = max_x - min_x
+                span_y = max_y - min_y
+                marker_span = max(span_x, span_y)
+
+                center_x = 0.5 * (min_x + max_x)
+                center_y = 0.5 * (min_y + max_y)
+
+                # Crop an area roughly three times larger than the marker.
+                crop_size = int(
+                    max(
+                        48,
+                        marker_span * 3.0,
+                    )
+                )
+
+                crop_size = min(
+                    crop_size,
+                    self.out_w,
+                    self.out_h,
+                )
+
+                x0 = int(round(center_x - crop_size / 2))
+                y0 = int(round(center_y - crop_size / 2))
+
+                x0 = max(
+                    0,
+                    min(x0, self.out_w - crop_size),
+                )
+
+                y0 = max(
+                    0,
+                    min(y0, self.out_h - crop_size),
+                )
+
+                x1 = x0 + crop_size
+                y1 = y0 + crop_size
+
+                zoom_crop = zoom_source[
+                    y0:y1,
+                    x0:x1,
+                ].copy()
+
+                inset_size = min(
+                    240,
+                    self.out_w // 2,
+                    self.out_h // 2,
+                )
+
+                zoom_image = cv2.resize(
+                    zoom_crop,
+                    (inset_size, inset_size),
+                    interpolation=cv2.INTER_NEAREST,
+                )
+
+                scale_x = inset_size / float(x1 - x0)
+                scale_y = inset_size / float(y1 - y0)
+
+                zoom_points = [None, None, None, None]
+
+                for corner_index, point in enumerate(pixel_points):
+                    if point is None:
+                        continue
+
+                    zoom_x = int(
+                        round((point[0] - x0) * scale_x)
+                    )
+
+                    zoom_y = int(
+                        round((point[1] - y0) * scale_y)
+                    )
+
+                    zoom_point = (zoom_x, zoom_y)
+                    zoom_points[corner_index] = zoom_point
+
+                if all(
+                    point is not None
+                    for point in zoom_points
+                ):
+                    zoom_polygon = np.asarray(
+                        zoom_points,
+                        dtype=np.int32,
+                    ).reshape(-1, 1, 2)
+
+                    cv2.polylines(
+                        zoom_image,
+                        [zoom_polygon],
+                        isClosed=True,
+                        color=(255, 255, 255),
+                        thickness=2,
+                        lineType=cv2.LINE_AA,
+                    )
+
+                for corner_index, point in enumerate(zoom_points):
+                    if point is None:
+                        continue
+
+                    color = corner_colors[corner_index]
+
+                    cv2.circle(
+                        zoom_image,
+                        point,
+                        radius=5,
+                        color=color,
+                        thickness=-1,
+                        lineType=cv2.LINE_AA,
+                    )
+
+                    cv2.circle(
+                        zoom_image,
+                        point,
+                        radius=8,
+                        color=(255, 255, 255),
+                        thickness=1,
+                        lineType=cv2.LINE_AA,
+                    )
+
+                    cv2.putText(
+                        zoom_image,
+                        str(corner_index),
+                        (
+                            point[0] + label_offsets[corner_index][0],
+                            point[1] + label_offsets[corner_index][1],
+                        ),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.55,
+                        color,
+                        2,
+                        cv2.LINE_AA,
+                    )
+
+                # Show the marker size in both output and original camera pixels.
+                raw_span_x = span_x / float(self.upscale)
+                raw_span_y = span_y / float(self.upscale)
+
+                cv2.rectangle(
+                    zoom_image,
+                    (0, 0),
+                    (inset_size - 1, inset_size - 1),
+                    (255, 255, 255),
+                    2,
+                )
+
+                cv2.putText(
+                    zoom_image,
+                    "TCN CORNER ZOOM",
+                    (6, 18),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.45,
+                    (255, 255, 255),
+                    1,
+                    cv2.LINE_AA,
+                )
+
+                cv2.putText(
+                    zoom_image,
+                    (
+                        f"sensor span: "
+                        f"{raw_span_x:.1f} x {raw_span_y:.1f}px"
+                    ),
+                    (6, inset_size - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.40,
+                    (255, 255, 255),
+                    1,
+                    cv2.LINE_AA,
+                )
+
+                # Place inset in upper-right corner.
+                inset_x = self.out_w - inset_size - 8
+                inset_y = 8
+
+                frame_bgr[
+                    inset_y:inset_y + inset_size,
+                    inset_x:inset_x + inset_size,
+                ] = zoom_image
+
+            valid_count = sum(
+                point is not None
+                for point in pixel_points
+            )
+
+            cv2.putText(
+                frame_bgr,
+                f"policy corners: {valid_count}/4",
+                (5, self.out_h - 10),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                (255, 255, 255),
+                1,
+                cv2.LINE_AA,
+            )
 
         # print(f"[DEBUG WRITE] bbox_gt arg={bbox_gt}, frame shape={frame_bgr.shape}")
         self.writer.write(frame_bgr)   # <-- now happens AFTER all drawing
@@ -547,20 +541,110 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg,
     env_cfg.scene.num_envs = (args_cli.num_envs if args_cli.num_envs is not None
                               else env_cfg.scene.num_envs)
 
-    log_root_path = os.path.abspath(
-        os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
-    )
-    print(f"[INFO] Loading experiment from directory: {log_root_path}")
-    resume_path = get_checkpoint_path(log_root_path, agent_cfg.load_run,
-                                      agent_cfg.load_checkpoint)
-    print("Resume path: ", resume_path)
-    log_dir = os.path.dirname(resume_path)
-    print("Log dir: ", log_dir)
-    policy_path = log_dir
+    # -------------------------------------------------------------------------
+    # Resolve output/checkpoint paths
+    # -------------------------------------------------------------------------
+    if args_cli.student_checkpoint is not None:
+        # Offline DAgger checkpoints do not live inside a normal RSL-RL run.
+        resume_path = None
+
+        policy_path = os.path.dirname(
+            os.path.abspath(args_cli.student_checkpoint)
+        )
+        log_dir = policy_path
+
+        print(
+            "[INFO] Evaluating offline DAgger student:",
+            args_cli.student_checkpoint,
+        )
+    else:
+        log_root_path = os.path.abspath(
+            os.path.join(
+                "logs",
+                "rsl_rl",
+                agent_cfg.experiment_name,
+            )
+        )
+
+        print(
+            f"[INFO] Loading experiment from directory: "
+            f"{log_root_path}"
+        )
+
+        resume_path = get_checkpoint_path(
+            log_root_path,
+            agent_cfg.load_run,
+            agent_cfg.load_checkpoint,
+        )
+
+        log_dir = os.path.dirname(resume_path)
+        policy_path = log_dir
+
+        print("Resume path:", resume_path)
+        print("Log dir:", log_dir)
 
     env_cfg.eval_mode = True
-    env_cfg.viewer.resolution = (1920, 1080)
     env_cfg.seed = args_cli.seed
+
+    # Evaluation uses analytic corners. Replicator textures, tiled RGB
+    # cameras, and debug visualization are unnecessary unless recording.
+    env_cfg.visual_dr_enabled = False
+    env_cfg.debug_vis = False
+    env_cfg.enable_onboard_camera = bool(
+        args_cli.video
+    )
+
+    env_cfg.viewer.resolution = (
+        1920,
+        1080,
+    )
+
+    if args_cli.curriculum_level is not None:
+        if not 0.0 <= args_cli.curriculum_level <= 1.0:
+            raise ValueError(
+                "--curriculum_level must lie in [0, 1]."
+            )
+
+        env_cfg.forced_curriculum_level = float(
+            args_cli.curriculum_level
+        )
+
+        pos_start = torch.tensor(
+            env_cfg.init_pos_noise_start,
+            dtype=torch.float32,
+        )
+
+        pos_end = torch.tensor(
+            env_cfg.init_pos_noise_end,
+            dtype=torch.float32,
+        )
+
+        level = env_cfg.forced_curriculum_level
+
+        active_pos_noise = (
+            pos_start
+            + level * (pos_end - pos_start)
+        )
+
+        active_yaw_noise = (
+            env_cfg.init_yaw_noise_start
+            + level
+            * (
+                env_cfg.init_yaw_noise_end
+                - env_cfg.init_yaw_noise_start
+            )
+        )
+
+        print(
+            "[EVAL] Forced curriculum level:",
+            level,
+        )
+
+        print(
+            "[EVAL] Active reset ranges:",
+            f"position=±{active_pos_noise.tolist()} m,",
+            f"yaw=±{active_yaw_noise:.4f} rad",
+        )
     env_cfg.sim.device = (args_cli.device if args_cli.device is not None
                           else env_cfg.sim.device)
     agent_cfg.device = env_cfg.sim.device
@@ -611,60 +695,220 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg,
         "video_length": args_cli.video_length,
         "name_prefix":  video_name,
     }
-    envs = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array")
-    envs = gym.wrappers.RecordVideo(envs, **video_kwargs)
+    render_mode = (
+        "rgb_array"
+        if args_cli.video
+        else None
+    )
+
+    print(
+        "[EVAL STARTUP] Creating environment...",
+        flush=True,
+    )
+
+    envs = gym.make(
+        args_cli.task,
+        cfg=env_cfg,
+        render_mode=render_mode,
+    )
+
+    print(
+        "[EVAL STARTUP] Environment created.",
+        flush=True,
+    )
+
+    if args_cli.video:
+        envs = gym.wrappers.RecordVideo(
+            envs,
+            **video_kwargs,
+        )
+
     device = envs.unwrapped.device
-
     # ---- Onboard camera recorder -------------------------------------------
-    # Camera resolution comes from env cfg — always in sync
-    cam_h = env_cfg.camera.height   # 128
-    cam_w = env_cfg.camera.width    # 128
+    onboard_recorder = None
 
-    onboard_video_path = os.path.join(
-        video_folder_path,
-        save_prefix + "_onboard_camera" + robot_index_prefix + ".mp4",
-    )
-    onboard_recorder = OnboardCameraRecorder(
-        output_path=onboard_video_path,
-        img_h=cam_h,
-        img_w=cam_w,
-        fps=env_cfg.policy_rate_hz,  # 50 — matches policy step rate
-        upscale=4,                    # 128 -> 512 pixels
-    )
+    if args_cli.video:
+        cam_h = env_cfg.camera.height
+        cam_w = env_cfg.camera.width
+
+        onboard_video_path = os.path.join(
+            video_folder_path,
+            (
+                save_prefix
+                + "_onboard_camera"
+                + robot_index_prefix
+                + ".mp4"
+            ),
+        )
+
+        onboard_recorder = OnboardCameraRecorder(
+            output_path=onboard_video_path,
+            img_h=cam_h,
+            img_w=cam_w,
+            fps=env_cfg.policy_rate_hz,
+            upscale=8,
+        )
 
     # ---- Load RL policy ----------------------------------------------------
     envs = RslRlVecEnvWrapper(envs)
-    print(f"[INFO]: Loading model checkpoint from: {resume_path}")
-    # Forward use_gru flag so VisionStudentTeacher is constructed with the right architecture
+    # ---- Construct policy --------------------------------------------------
     agent_cfg_dict = agent_cfg.to_dict()
-    if "policy" in agent_cfg_dict:
-        agent_cfg_dict["policy"]["use_gru"] = args_cli.use_gru
-    ppo_runner = OnPolicyRunner(envs, agent_cfg_dict,
-                                log_dir=None, device=agent_cfg.device)
-    ppo_runner.load(resume_path)
-    agent = ppo_runner.get_inference_policy(device=envs.unwrapped.device)
+
+    if (
+        "policy" in agent_cfg_dict
+        and "use_gru" in agent_cfg_dict["policy"]
+    ):
+        agent_cfg_dict["policy"]["use_gru"] = False
+
+    policy_class_name = agent_cfg_dict.get(
+        "policy",
+        {},
+    ).get(
+        "class_name",
+        "",
+    )
+
+    if policy_class_name == "CornersTCNActorCritic":
+        # algorithm.class_name remains "PPO"; this changes the
+        # concrete implementation used to construct the runner.
+        rsl_rl_algorithms.PPO = CornersAnchoredPPO
+        opr.PPO = CornersAnchoredPPO
+
+        print(
+            "[INFO] Evaluation PPO implementation: "
+            "CornersAnchoredPPO"
+        )
+
+    ppo_runner = OnPolicyRunner(
+        envs,
+        agent_cfg_dict,
+        log_dir=None,
+        device=agent_cfg.device,
+    )
+
+    if args_cli.student_checkpoint is None:
+        if resume_path is None:
+            raise RuntimeError(
+                "No RSL-RL checkpoint path was resolved."
+            )
+
+        print(
+            f"[INFO] Loading RSL-RL model weights for inference: "
+            f"{resume_path}"
+        )
+
+        checkpoint = torch.load(
+            resume_path,
+            map_location=agent_cfg.device,
+            weights_only=False,
+        )
+
+        if "model_state_dict" not in checkpoint:
+            raise KeyError(
+                f"RSL-RL checkpoint {resume_path} does not contain "
+                "'model_state_dict'. "
+                f"Available keys: {list(checkpoint.keys())}"
+            )
+
+        load_result = ppo_runner.alg.policy.load_state_dict(
+            checkpoint["model_state_dict"],
+            strict=True,
+        )
+
+        print(
+            "[INFO] RSL-RL model loaded strictly; "
+            "optimizer state intentionally skipped during evaluation."
+        )
+        print("[INFO] load_state_dict result:", load_result)
+
+        if "iter" in checkpoint:
+            ppo_runner.current_learning_iteration = int(
+                checkpoint["iter"]
+            )
+
+    else:
+        print(
+            "[INFO] Loading offline DAgger student:",
+            args_cli.student_checkpoint,
+        )
+
+        checkpoint = torch.load(
+            args_cli.student_checkpoint,
+            map_location=agent_cfg.device,
+        )
+
+        if "student_state_dict" not in checkpoint:
+            raise KeyError(
+                "Offline checkpoint does not contain "
+                "'student_state_dict'."
+            )
+
+        ppo_runner.alg.policy.student.load_state_dict(
+            checkpoint["student_state_dict"],
+            strict=True,
+        )
+
+        print("[INFO] Offline student loaded successfully.")
+
+    agent = ppo_runner.get_inference_policy(
+        device=envs.unwrapped.device
+    )
 
     # Direct reference to Isaac Lab env for camera access
     # envs is now RslRlVecEnvWrapper -> RecordVideo -> ArucoHoverStudentEnv
     isaac_env = envs.unwrapped   # ArucoHoverStudentEnv
 
-    # ---- ONNX export -------------------------------------------------------
-    export_model_dir = os.path.join(os.path.dirname(resume_path), "exported")
-    try:
-        export_policy_as_onnx(
-            ppo_runner.alg.policy,
-            normalizer=ppo_runner.obs_normalizer,
-            path=export_model_dir,
-            filename="teacher_policy.onnx",
-        )
-    except AttributeError as e:
-        print(f"[WARN] ONNX export skipped: {e}")
+    # # ---- ONNX export -------------------------------------------------------
+    # export_model_dir = os.path.join(os.path.dirname(resume_path), "exported")
+    # try:
+    #     export_policy_as_onnx(
+    #         ppo_runner.alg.policy,
+    #         normalizer=ppo_runner.obs_normalizer,
+    #         path=export_model_dir,
+    #         filename="teacher_policy.onnx",
+    #     )
+    # except AttributeError as e:
+    #     print(f"[WARN] ONNX export skipped: {e}")
 
     # ---- Initial observations ----------------------------------------------
-    obs, extras  = envs.get_observations()
-    obs_dict     = extras.get("observations", {})
-    full_state   = obs_dict.get("full_state", None)
-    print("Starting obs: ", full_state)
+    obs, extras = envs.get_observations()
+
+    obs_dict = extras.get(
+        "observations",
+        None,
+    )
+
+    if obs_dict is None:
+        raise RuntimeError(
+            "envs.get_observations() did not return "
+            "extras['observations']."
+        )
+
+    if obs_dict["policy"].shape[-1] != 256:
+        raise RuntimeError(
+            f"Expected a 256-D corners history, got "
+            f"{obs_dict['policy'].shape}."
+        )
+
+    full_state = obs_dict.get(
+        "full_state",
+        None,
+    )
+
+    print(
+        "[INFO] Initial policy shape:",
+        obs_dict["policy"].shape,
+    )
+
+    print(
+        "[INFO] Full-state shape:",
+        full_state.shape,
+    )
+
+    print(
+        "[INFO] Initial full state, env 0:",
+        full_state[0].detach().cpu().tolist(),
+    )
 
     max_steps       = int(env_cfg.episode_length_s * env_cfg.policy_rate_hz)
     full_state_size = obs_dict["full_state"].shape[1]
@@ -676,104 +920,531 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg,
     actions_log = torch.zeros((args_cli.num_envs, max_steps, 4),
                               dtype=torch.float32).to(device)
 
-    steps      = 0
-    done       = False
-    done_count = 0
-    times      = []
+    steps = 0
+    times = []
+
+    # Per-environment episode tracking.
+    running_episode_returns = torch.zeros(
+        args_cli.num_envs,
+        device=device,
+        dtype=torch.float32,
+    )
+
+    running_episode_lengths = torch.zeros(
+        args_cli.num_envs,
+        device=device,
+        dtype=torch.long,
+    )
+
+    completed_episode_returns = []
+    completed_episode_lengths = []
+
+    number_of_deaths = 0
+    number_of_timeouts = 0
+    number_of_completed_episodes = 0
+    
+    # ------------------------------------------------------------------
+    # Initial-episode paired-evaluation records
+    #
+    # Each environment contributes exactly one record: the episode that
+    # began at evaluation startup. Episodes created by automatic resets
+    # are deliberately excluded.
+    # ------------------------------------------------------------------
+
+    initial_full_state = (
+        obs_dict["full_state"]
+        .detach()
+        .cpu()
+        .clone()
+    )
+
+    initial_policy_observation = (
+        obs_dict["policy"]
+        .detach()
+        .cpu()
+        .clone()
+    )
+
+    first_episode_recorded = torch.zeros(
+        args_cli.num_envs,
+        device=device,
+        dtype=torch.bool,
+    )
+
+    first_episode_survived = torch.zeros(
+        args_cli.num_envs,
+        device=device,
+        dtype=torch.bool,
+    )
+
+    first_episode_died = torch.zeros(
+        args_cli.num_envs,
+        device=device,
+        dtype=torch.bool,
+    )
+
+    first_episode_returns = torch.full(
+        (args_cli.num_envs,),
+        float("nan"),
+        device=device,
+        dtype=torch.float32,
+    )
+
+    first_episode_lengths = torch.full(
+        (args_cli.num_envs,),
+        -1,
+        device=device,
+        dtype=torch.long,
+    )
+
+    first_episode_termination_steps = torch.full(
+        (args_cli.num_envs,),
+        -1,
+        device=device,
+        dtype=torch.long,
+    )
+
+    # Raw action statistics before clipping.
+    raw_action_value_count = 0
+    raw_action_exceed_count = 0
+
+    raw_action_vector_count = 0
+    raw_action_vector_exceed_count = 0
+
+    maximum_raw_action_magnitude = 0.0
 
     with torch.no_grad():
         while simulation_app.is_running():
 
-            while steps < max_steps and not done:
+            while steps < max_steps:
                 full_states[:, steps, :] = obs_dict["full_state"]
+                # ------------------------------------------------------------------
+                # Extract the newest corner observation directly from policy input.
+                #
+                # policy observation shape:
+                #     (num_envs, 256)
+                #
+                # reshaped:
+                #     (num_envs, 32 timestamps, 8 corner coordinates)
+                # ------------------------------------------------------------------
+                policy_history = obs_dict["policy"].reshape(
+                    args_cli.num_envs,
+                    32,
+                    8,
+                )
+
+                latest_policy_corners = policy_history[
+                    record_env_idx,
+                    -1,
+                ].reshape(4, 2)
+
+                corners_overlay = (
+                    latest_policy_corners
+                    .detach()
+                    .cpu()
+                    .numpy()
+                )
+
+                if args_cli.debug_corners and steps < 10:
+                    print(
+                        f"\n[CORNER DEBUG] step={steps}"
+                    )
+
+                    for corner_index in range(4):
+                        u_value = float(
+                            latest_policy_corners[
+                                corner_index,
+                                0,
+                            ].item()
+                        )
+
+                        v_value = float(
+                            latest_policy_corners[
+                                corner_index,
+                                1,
+                            ].item()
+                        )
+
+                        print(
+                            f"  corner {corner_index}: "
+                            f"u={u_value:.5f}, "
+                            f"v={v_value:.5f}"
+                        )
 
                 # ---- Policy forward pass -----------------------------------
                 # agent() calls act_inference -> update_distribution -> _encode
                 # which stashes _last_marker on ppo_runner.alg.policy
-                start   = time.time()
-                actions = agent(obs_dict["policy"])
-                actions_log[:, steps] = actions
-                times.append(time.time() - start)
+                start = time.time()
 
-                # ---- Read marker prediction --------------------------------
-                # _last_marker: (N, 5) — [cx, cy, w, h, confidence], all post-Sigmoid,
-                # set as a side effect of agent() calling update_distribution() -> _encode
-                marker = None
-                if hasattr(ppo_runner.alg.policy, "_last_marker"):
-                    marker = ppo_runner.alg.policy._last_marker  # (N, 5)
+                raw_actions = agent(
+                    obs_dict["policy"]
+                )
+
+                times.append(
+                    time.time() - start
+                )
+
+                if not torch.isfinite(raw_actions).all():
+                    raise RuntimeError(
+                        f"Student produced non-finite actions at step {steps}: "
+                        f"{raw_actions}"
+                    )
+
+                # Count individual action components outside [-1, 1].
+                exceeds_limit = raw_actions.abs() > 1.0
+
+                raw_action_exceed_count += int(
+                    exceeds_limit.sum().item()
+                )
+
+                raw_action_value_count += raw_actions.numel()
+
+                # Count environment action vectors where at least one component
+                # is outside [-1, 1].
+                vector_exceeds_limit = exceeds_limit.any(
+                    dim=-1
+                )
+
+                raw_action_vector_exceed_count += int(
+                    vector_exceeds_limit.sum().item()
+                )
+
+                raw_action_vector_count += raw_actions.shape[0]
+
+                maximum_raw_action_magnitude = max(
+                    maximum_raw_action_magnitude,
+                    float(raw_actions.abs().max().item()),
+                )
+
+                # Match the clipping performed by _pre_physics_step().
+                actions = torch.clamp(
+                    raw_actions,
+                    min=-1.0,
+                    max=1.0,
+                )
+
+                actions_log[:, steps] = actions
+
+                if steps < 10:
+                    print(
+                        f"\n[EVAL] step={steps}, "
+                        f"raw={raw_actions[record_env_idx].detach().cpu().tolist()}, "
+                        f"executed={actions[record_env_idx].detach().cpu().tolist()}"
+                    )
+
 
                 # ---- Read onboard RGB --------------------------------------
                 # rgb: (N, H, W, 3) uint8 — confirmed from debug output
                 # This is the frame from the PREVIOUS step (sensor lag of 1),
                 # which is acceptable for video overlay purposes.
                 rgb_nhwc = None
-                try:
-                    rgb_data = isaac_env._camera.data.output.get("rgb", None)
-                    if rgb_data is not None and rgb_data.ndim == 4:
-                        rgb_nhwc = rgb_data  # (N, H, W, 3) uint8, no alpha
-                except Exception as e:
-                    print(f"[WARN] Camera read failed at step {steps}: {e}")
+
+                if onboard_recorder is not None:
+                    if isaac_env._camera is None:
+                        raise RuntimeError(
+                            "Video recording was requested, but the "
+                            "onboard camera was not created."
+                        )
+
+                    try:
+                        rgb_data = (
+                            isaac_env
+                            ._camera
+                            .data
+                            .output
+                            .get("rgb", None)
+                        )
+
+                        if (
+                            rgb_data is not None
+                            and rgb_data.ndim == 4
+                        ):
+                            rgb_nhwc = rgb_data
+
+                    except Exception as error:
+                        print(
+                            f"[WARN] Camera read failed at "
+                            f"step {steps}: {error}"
+                        )
 
                 # ---- Write onboard frame -----------------------------------
-                if rgb_nhwc is not None:
+                if onboard_recorder is not None and rgb_nhwc is not None:
                     #feature_map = getattr(ppo_runner.alg.policy, "_last_feature_map", None)
                     feature_map = None  # Disable feature map overlay for now
                     bbox_tuple = None
+                    bbox_raw = None
+
+                    # Compute and draw the bbox independently of corner debugging.
                     if args_cli.debug_bbox:
-                        _e = envs.unwrapped
-                        bbox_raw = _e._compute_bbox_gt()
-                        if steps < 5:
-                            print(f"[DEBUG] record_env_idx={record_env_idx}, "
-                                  f"num_envs={args_cli.num_envs}, follow_robot={args_cli.follow_robot}")
-                            print(f"[DEBUG] bbox_raw full tensor: {bbox_raw}")
-                        candidate = tuple(bbox_raw[record_env_idx].cpu().tolist())
-                        # -1.0 sentinel means marker wasn't in front of the camera this frame
-                        if candidate[0] != -1.0:
-                            bbox_tuple = candidate[:4]  # GT bbox is (cx, cy, w, h, visible) -> drop visible flag
-                        else:
-                            print(f"[DEBUG DRAW] step {steps}: marker not visible, skipping GT box")
+                        bbox_raw = (
+                            isaac_env._compute_bbox_gt()
+                        )
 
-                    # ---- Predicted bbox overlay (student's own belief) ----------
-                    bbox_pred_tuple = None
-                    if args_cli.debug_bbox_pred and marker is not None:
-                        pred_candidate = tuple(marker[record_env_idx].cpu().tolist())  # (cx, cy, w, h, conf)
-                        conf = pred_candidate[4]
-                        if steps < 5:
-                            print(f"[DEBUG] predicted bbox: cx={pred_candidate[0]:.3f} "
-                                  f"cy={pred_candidate[1]:.3f} w={pred_candidate[2]:.3f} "
-                                  f"h={pred_candidate[3]:.3f} conf={conf:.3f}")
-                        # Only draw when the network itself is confident the marker is visible
-                        if conf > 0.5:
-                            bbox_pred_tuple = pred_candidate
-                        else:
-                            print(f"[DEBUG DRAW] step {steps}: predicted confidence {conf:.2f} <= 0.5, skipping pred box")
+                        candidate = tuple(
+                            bbox_raw[
+                                record_env_idx
+                            ].detach().cpu().tolist()
+                        )
 
+                        # Layout:
+                        # [cx, cy, width, height, visible]
+                        if (
+                            candidate[0] >= 0.0
+                            and candidate[4] > 0.5
+                        ):
+                            bbox_tuple = candidate[:4]
+
+                        elif steps < 5:
+                            print(
+                                f"[DEBUG DRAW] step {steps}: "
+                                f"marker bbox not visible"
+                            )
+
+                    # Compare the exact policy corners with the separately calculated bbox.
+                    if (
+                        args_cli.debug_corners
+                        and steps < 10
+                    ):
+                        valid_corner_mask = (
+                            (latest_policy_corners[:, 0] >= 0.0)
+                            & (latest_policy_corners[:, 0] <= 1.0)
+                            & (latest_policy_corners[:, 1] >= 0.0)
+                            & (latest_policy_corners[:, 1] <= 1.0)
+                        )
+
+                        if (
+                            valid_corner_mask.all()
+                            and bbox_raw is not None
+                            and bbox_raw[
+                                record_env_idx,
+                                4,
+                            ] > 0.5
+                        ):
+                            corner_center = (
+                                latest_policy_corners.mean(
+                                    dim=0
+                                )
+                            )
+
+                            bbox_center = bbox_raw[
+                                record_env_idx,
+                                0:2,
+                            ]
+
+                            center_error = (
+                                corner_center
+                                - bbox_center
+                            )
+
+                            print(
+                                "[PROJECTION CHECK] "
+                                f"corner center="
+                                f"{corner_center.detach().cpu().tolist()}, "
+                                f"bbox center="
+                                f"{bbox_center.detach().cpu().tolist()}, "
+                                f"difference="
+                                f"{center_error.detach().cpu().tolist()}"
+                            )
+
+                        if bbox_raw is not None and steps < 5:
+                            print(
+                                "[DEBUG] selected bbox:",
+                                bbox_raw[
+                                    record_env_idx
+                                ].detach().cpu().tolist(),
+                            )
+                            
                     onboard_recorder.write_frame(
                         rgb_nhwc=rgb_nhwc,
-                        feature_map=feature_map,
+                        feature_map=None,
                         env_idx=record_env_idx,
                         bbox_gt=bbox_tuple,
-                        bbox_pred=bbox_pred_tuple,
+                        bbox_pred=None,
+                        corners_obs=(
+                            corners_overlay
+                            if args_cli.debug_corners
+                            else None
+                        ),
                     )
 
                 # ---- Step environment --------------------------------------
-                obs, reward, dones, extras = envs.step(actions)
-                # # Add INSIDE the eval loop, right after obs_dict is updated (after envs.step):
-                # if args_cli.debug_bbox and steps < 5:
-                #     bbox_gt = obs_dict.get("bbox_gt", None)
-                #     print(f"[DEBUG] step {steps} bbox_gt: {bbox_gt[0].cpu().tolist() if bbox_gt is not None else None}")
-                done_count += dones.sum().item()
-                obs_dict    = extras.get("observations",
-                                         envs.unwrapped._get_observations())
-                info        = extras
-                rewards[:, steps] = reward.detach()
+                obs, reward, dones, extras = envs.step(
+                    actions
+                )
+
+                reward = reward.detach()
+
+                dones = dones.to(
+                    device=device,
+                    dtype=torch.bool,
+                )
+
+                # Accumulate the return and length of each currently running episode.
+                running_episode_returns += reward
+                running_episode_lengths += 1
+
+                rewards[:, steps] = reward
+
+                # --------------------------------------------------------------
+                # Determine which terminations were timeouts.
+                # --------------------------------------------------------------
+                timeout_mask = extras.get(
+                    "time_outs",
+                    None,
+                )
+
+                if timeout_mask is None:
+                    timeout_mask = extras.get(
+                        "truncated",
+                        None,
+                    )
+
+                if timeout_mask is not None:
+                    timeout_mask = timeout_mask.to(
+                        device=device,
+                        dtype=torch.bool,
+                    )
+                else:
+                    # Fallback for environments that do not explicitly return
+                    # a timeout mask.
+                    timeout_mask = (
+                        dones
+                        & (running_episode_lengths >= max_steps)
+                    )
+
+                # Any termination that was not a timeout is counted as a death.
+                death_mask = dones & ~timeout_mask
+
+                # ------------------------------------------------------
+                # Record the first episode only.
+                #
+                # running_episode_returns and running_episode_lengths
+                # still contain the completed episode values here. They
+                # are reset later in the existing done_indices block.
+                # ------------------------------------------------------
+
+                first_done_mask = (
+                    dones
+                    & ~first_episode_recorded
+                )
+
+                first_done_indices = torch.nonzero(
+                    first_done_mask,
+                    as_tuple=False,
+                ).squeeze(-1)
+
+                if first_done_indices.numel() > 0:
+                    first_episode_survived[
+                        first_done_indices
+                    ] = timeout_mask[
+                        first_done_indices
+                    ]
+
+                    first_episode_died[
+                        first_done_indices
+                    ] = death_mask[
+                        first_done_indices
+                    ]
+
+                    first_episode_returns[
+                        first_done_indices
+                    ] = running_episode_returns[
+                        first_done_indices
+                    ]
+
+                    first_episode_lengths[
+                        first_done_indices
+                    ] = running_episode_lengths[
+                        first_done_indices
+                    ]
+
+                    # The initial episode started at evaluation step zero,
+                    # so its termination step is identical to its recorded
+                    # episode length.
+                    first_episode_termination_steps[
+                        first_done_indices
+                    ] = running_episode_lengths[
+                        first_done_indices
+                    ]
+
+                    first_episode_recorded[
+                        first_done_indices
+                    ] = True
+
+                number_of_timeouts += int(
+                    timeout_mask.sum().item()
+                )
+
+                number_of_deaths += int(
+                    death_mask.sum().item()
+                )
+
+                number_of_completed_episodes += int(
+                    dones.sum().item()
+                )
+
+                # Store the return and length of completed episodes.
+                done_indices = torch.nonzero(
+                    dones,
+                    as_tuple=False,
+                ).flatten()
+
+                if done_indices.numel() > 0:
+                    completed_episode_returns.extend(
+                        running_episode_returns[
+                            done_indices
+                        ].detach().cpu().tolist()
+                    )
+
+                    completed_episode_lengths.extend(
+                        running_episode_lengths[
+                            done_indices
+                        ].detach().cpu().tolist()
+                    )
+
+                    # The Isaac Lab environment resets completed environments
+                    # automatically, so reset our external counters too.
+                    running_episode_returns[
+                        done_indices
+                    ] = 0.0
+
+                    running_episode_lengths[
+                        done_indices
+                    ] = 0
+
+                # IMPORTANT:
+                # Do not call envs.unwrapped._get_observations() here.
+                # It would shift the 32-step TCN history a second time.
+                obs_dict = extras.get(
+                    "observations",
+                    None,
+                )
+
+                if obs_dict is None:
+                    raise RuntimeError(
+                        "envs.step() did not return extras['observations']."
+                    )
+
+                info = extras
+
+                if steps == 0:
+                    print(
+                        "\n[DEBUG] extras keys:",
+                        list(extras.keys()),
+                    )
+
                 steps += 1
-                print(f"Step: {steps}", end="\r")
+
+                print(
+                    f"Step: {steps}/{max_steps}",
+                    end="\r",
+                )
 
             print()
 
             # ---- Finalise onboard video ------------------------------------
-            onboard_recorder.close()
+            if onboard_recorder is not None:
+                onboard_recorder.close()
 
             # ---- Save tensors ----------------------------------------------
             print("Full states shape: ", full_states.shape)
@@ -785,27 +1456,308 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg,
                                     save_prefix + "eval_rewards.pt"))
 
             print("Final Info:\n", info)
-            print("\nAverage inference time: ", np.mean(times))
+
+            mean_inference_time = (
+                float(np.mean(times))
+                if len(times) > 0
+                else float("nan")
+            )
+
+                        # ----------------------------------------------------------
+            # Save paired initial-episode records.
+            # ----------------------------------------------------------
+
+            missing_initial_records = torch.nonzero(
+                ~first_episode_recorded,
+                as_tuple=False,
+            ).squeeze(-1)
+
+            if missing_initial_records.numel() > 0:
+                raise RuntimeError(
+                    "Evaluation ended before all initial episodes "
+                    "terminated. Missing environment IDs: "
+                    f"{missing_initial_records.detach().cpu().tolist()}"
+                )
+
+            initial_timeout_count = int(
+                first_episode_survived.sum().item()
+            )
+
+            initial_death_count = int(
+                first_episode_died.sum().item()
+            )
+
+            if (
+                initial_timeout_count
+                + initial_death_count
+                != args_cli.num_envs
+            ):
+                raise RuntimeError(
+                    "Initial-episode outcome count is inconsistent: "
+                    f"timeouts={initial_timeout_count}, "
+                    f"deaths={initial_death_count}, "
+                    f"num_envs={args_cli.num_envs}."
+                )
+
+            record_directory = Path(
+                "eval_logs/initial_episode_records"
+            )
+
+            record_directory.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+
+            record_prefix = (
+                str(args_cli.save_prefix)
+                if args_cli.save_prefix
+                else "evaluation"
+            )
+
+            # Prevent a save prefix containing directories from creating
+            # unexpected nested paths.
+            record_prefix = Path(record_prefix).name
+
+            checkpoint_source = (
+                str(resume_path)
+                if resume_path is not None
+                else str(args_cli.student_checkpoint)
+            )
+
+            initial_episode_record = {
+                "schema_version": 1,
+                "task": str(args_cli.task),
+                "seed": int(args_cli.seed),
+                "curriculum_level": float(
+                    args_cli.curriculum_level
+                ),
+                "num_envs": int(args_cli.num_envs),
+                "max_steps": int(max_steps),
+                "checkpoint_source": checkpoint_source,
+                "save_prefix": record_prefix,
+
+                "env_id": torch.arange(
+                    args_cli.num_envs,
+                    dtype=torch.long,
+                ),
+
+                "initial_full_state": initial_full_state,
+                "initial_policy_observation": (
+                    initial_policy_observation
+                ),
+
+                "recorded": (
+                    first_episode_recorded
+                    .detach()
+                    .cpu()
+                ),
+
+                "survived": (
+                    first_episode_survived
+                    .detach()
+                    .cpu()
+                ),
+
+                "died": (
+                    first_episode_died
+                    .detach()
+                    .cpu()
+                ),
+
+                "episode_return": (
+                    first_episode_returns
+                    .detach()
+                    .cpu()
+                ),
+
+                "episode_length": (
+                    first_episode_lengths
+                    .detach()
+                    .cpu()
+                ),
+
+                "termination_step": (
+                    first_episode_termination_steps
+                    .detach()
+                    .cpu()
+                ),
+            }
+
+            initial_episode_record_path = (
+                record_directory
+                / f"{record_prefix}_initial_episodes.pt"
+            )
+
+            torch.save(
+                initial_episode_record,
+                initial_episode_record_path,
+            )
+
+            print(
+                "[EVAL] Saved initial-episode records:",
+                initial_episode_record_path,
+            )
+
+            print(
+                "[EVAL] Initial episodes:",
+                f"timeouts={initial_timeout_count},",
+                f"deaths={initial_death_count},",
+                f"total={args_cli.num_envs}",
+            )
+
+            if completed_episode_returns:
+                mean_completed_return = float(
+                    np.mean(completed_episode_returns)
+                )
+
+                mean_completed_length = float(
+                    np.mean(completed_episode_lengths)
+                )
+            else:
+                mean_completed_return = float("nan")
+                mean_completed_length = float("nan")
+
+            death_percentage = (
+                100.0
+                * number_of_deaths
+                / max(number_of_completed_episodes, 1)
+            )
+
+            timeout_percentage = (
+                100.0
+                * number_of_timeouts
+                / max(number_of_completed_episodes, 1)
+            )
+
+            raw_value_exceed_percentage = (
+                100.0
+                * raw_action_exceed_count
+                / max(raw_action_value_count, 1)
+            )
+
+            raw_vector_exceed_percentage = (
+                100.0
+                * raw_action_vector_exceed_count
+                / max(raw_action_vector_count, 1)
+            )
+
+            print()
+            print("=" * 72)
+            print("STUDENT-ONLY EVALUATION SUMMARY")
+            print("=" * 72)
+
+            print(
+                f"Initial episodes:         "
+                f"{args_cli.num_envs}"
+            )
+
+            print(
+                f"Initial deaths:           "
+                f"{initial_death_count} "
+                f"({100.0 * initial_death_count / args_cli.num_envs:.2f}%)"
+            )
+
+            print(
+                f"Initial timeouts:         "
+                f"{initial_timeout_count} "
+                f"({100.0 * initial_timeout_count / args_cli.num_envs:.2f}%)"
+            )
+
+            print(
+                f"Completed episodes:       "
+                f"{number_of_completed_episodes}"
+            )
+
+            print(
+                f"Deaths:                   "
+                f"{number_of_deaths} "
+                f"({death_percentage:.2f}%)"
+            )
+
+            print(
+                f"Timeouts:                 "
+                f"{number_of_timeouts} "
+                f"({timeout_percentage:.2f}%)"
+            )
+
+            print(
+                f"Mean completed return:    "
+                f"{mean_completed_return:.4f}"
+            )
+
+            print(
+                f"Mean completed length:    "
+                f"{mean_completed_length:.2f} steps"
+            )
+
+            print(
+                f"Mean completed duration:  "
+                f"{mean_completed_length / env_cfg.policy_rate_hz:.2f} s"
+            )
+
+            print(
+                f"Raw values outside range: "
+                f"{raw_action_exceed_count}/"
+                f"{raw_action_value_count} "
+                f"({raw_value_exceed_percentage:.3f}%)"
+            )
+
+            print(
+                f"Action vectors clipped:   "
+                f"{raw_action_vector_exceed_count}/"
+                f"{raw_action_vector_count} "
+                f"({raw_vector_exceed_percentage:.3f}%)"
+            )
+
+            print(
+                f"Maximum |raw action|:     "
+                f"{maximum_raw_action_magnitude:.4f}"
+            )
+
+            print(
+                f"Average inference time:   "
+                f"{mean_inference_time * 1000.0:.3f} ms"
+            )
+
+            print("=" * 72)
 
             # ---- Plots (unchanged) -----------------------------------------
             if args_cli.follow_robot >= 0:
                 import matplotlib.pyplot as plt
                 import isaaclab.utils.math as isaac_math_utils
 
-                quad_pos     = full_states[args_cli.follow_robot, :-1, 0:3].cpu().numpy()
-                quad_vel     = full_states[args_cli.follow_robot, :-1, 7:10].cpu().numpy()
-                quad_ang_vel = full_states[args_cli.follow_robot, :-1, 10:13].cpu().numpy()
-                marker_dist  = full_states[args_cli.follow_robot, :-1, 17].cpu().numpy()
+                quad_pos = full_states[
+                    args_cli.follow_robot, :steps, 0:3
+                ].cpu().numpy()
+
+                quad_vel = full_states[
+                    args_cli.follow_robot, :steps, 7:10
+                ].cpu().numpy()
+
+                quad_ang_vel = full_states[
+                    args_cli.follow_robot, :steps, 10:13
+                ].cpu().numpy()
+
+                marker_dist = full_states[
+                    args_cli.follow_robot, :steps, 17
+                ].cpu().numpy()
 
                 quad_euler = isaac_math_utils.euler_xyz_from_quat(
-                    full_states[args_cli.follow_robot, :-1, 3:7]
+                    full_states[
+                        args_cli.follow_robot,
+                        :steps,
+                        3:7,
+                    ]
                 )
                 quad_roll  = quad_euler[0].cpu().numpy()
                 quad_pitch = quad_euler[1].cpu().numpy()
                 quad_yaw   = quad_euler[2].cpu().numpy()
 
-                T = rewards.shape[1] - 1
-                x = np.arange(T) * (1.0 / env_cfg.policy_rate_hz)
+                T = steps
+
+                x = np.arange(T) * (
+                    1.0 / env_cfg.policy_rate_hz
+                )
 
                 save_path = os.path.join(video_folder_path, video_name + ".png")
                 fig = plt.figure(figsize=(10, 10))
@@ -837,7 +1789,15 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg,
                 act_labels = ["Thrust (norm.)", "Roll rate", "Pitch rate", "Yaw rate"]
                 for i, label in enumerate(act_labels):
                     plt.subplot(2, 2, i + 1)
-                    plt.plot(x, actions_np[args_cli.follow_robot, :-1, i], label=label)
+                    plt.plot(
+                        x,
+                        actions_np[
+                            args_cli.follow_robot,
+                            :steps,
+                            i,
+                        ],
+                        label=label,
+                    )
                     plt.legend(loc="best")
                 plt.tight_layout()
                 save_path = os.path.join(video_folder_path,
@@ -849,7 +1809,6 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg,
             envs.close()
             simulation_app.close()
             break
-
 
 if __name__ == "__main__":
     main()

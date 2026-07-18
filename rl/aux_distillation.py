@@ -25,10 +25,37 @@ class AuxDistillation(Distillation):
         self.beta_anneal_iters = beta_anneal_iters
         self._bbox_gt_buffer = []     # collects (N, 5) per step; cleared after update()
 
-    @property
+    '''@property
     def beta(self) -> float:
         t = min(self.num_updates, self.beta_anneal_iters)
         return self.beta_start + (self.beta_end - self.beta_start) * (t / self.beta_anneal_iters)
+    '''
+
+    @property
+    def beta(self) -> float:
+        """Fraction of environments controlled by the teacher."""
+
+        warmup_updates = 25
+
+        if self.num_updates <= warmup_updates:
+            return float(self.beta_start)
+
+        anneal_step = min(
+            self.num_updates - warmup_updates,
+            self.beta_anneal_iters,
+        )
+
+        progress = anneal_step / max(self.beta_anneal_iters, 1)
+
+        beta = (
+            self.beta_start
+            + progress * (self.beta_end - self.beta_start)
+        )
+
+        lower = min(self.beta_start, self.beta_end)
+        upper = max(self.beta_start, self.beta_end)
+
+        return float(max(lower, min(beta, upper)))
 
     def act(self, obs, privileged_obs):
         """
@@ -41,7 +68,20 @@ class AuxDistillation(Distillation):
             teacher_action = self.policy.evaluate(privileged_obs)
 
         beta = self.beta
-        return beta * teacher_action + (1.0 - beta) * student_action
+
+        teacher_mask = (
+            torch.rand(
+                student_action.shape[0],
+                1,
+                device=student_action.device,
+            ) < beta
+        )
+
+        return torch.where(
+            teacher_mask,
+            teacher_action,
+            student_action,
+        )
     
     def process_env_step(self, rewards, dones, infos):
         bbox_gt = infos.get("observations", {}).get("bbox_gt", None)
@@ -65,6 +105,7 @@ class AuxDistillation(Distillation):
         loss = torch.tensor(0.0, device=self.device)
         cnt = 0
         sample_idx = 0
+        accumulation_count = 0
 
         for epoch in range(self.num_learning_epochs):
             self.policy.reset(hidden_states=self.last_hidden_states)
@@ -87,12 +128,18 @@ class AuxDistillation(Distillation):
                 sample_idx += batch_size
 
                 loss = loss + behavior_loss + aux_loss
+                accumulation_count += 1
                 mean_behavior_loss += behavior_loss.item()
                 cnt += 1
 
-                if cnt % self.gradient_length == 0:
+                if accumulation_count == self.gradient_length:
                     self.optimizer.zero_grad()
-                    loss.backward()
+
+                    averaged_loss = (
+                        loss / accumulation_count
+                    )
+
+                    averaged_loss.backward()
                     if self.is_multi_gpu:
                         self.reduce_parameters()
                     if self.max_grad_norm:
@@ -104,9 +151,31 @@ class AuxDistillation(Distillation):
                     self.policy.detach_hidden_states()
                     loss = torch.tensor(0.0, device=obs.device)
 
+                    accumulation_count = 0
+
                 self.policy.reset(dones.view(-1))
                 self.policy.detach_hidden_states(dones.view(-1))
 
+        # Flush the final incomplete accumulation group.
+        if accumulation_count > 0:
+            self.optimizer.zero_grad()
+
+            averaged_loss = (
+                loss / accumulation_count
+            )
+
+            averaged_loss.backward()
+
+            if self.is_multi_gpu:
+                self.reduce_parameters()
+
+            if self.max_grad_norm:
+                nn.utils.clip_grad_norm_(
+                    self.policy.student.parameters(),
+                    self.max_grad_norm,
+                )
+
+            self.optimizer.step()
         mean_behavior_loss /= max(cnt, 1)
         mean_aux_loss /= max(cnt, 1)
         self.storage.clear()

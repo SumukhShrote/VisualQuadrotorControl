@@ -72,6 +72,14 @@ class AuxPPO(PPO):
         return super().process_env_step(rewards, dones, infos)
 
     def update(self):
+        if not (
+            hasattr(self.policy, "backbone")
+            and hasattr(self.policy, "bbox_head")
+        ):
+            self._bbox_gt_buffer.clear()
+            return super().update()
+
+        # Existing RGB auxiliary-PPO implementation continues below.
         # At the start of update(), freeze backbone for PPO pass
         for param in self.policy.backbone.parameters():
             param.requires_grad_(False)

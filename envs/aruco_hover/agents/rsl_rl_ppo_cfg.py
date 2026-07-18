@@ -93,31 +93,78 @@ class VisionActorCriticCfg(RslRlPpoActorCriticCfg):
     activation: str = "elu"
 
 @configclass
+class CornersTCNActorCriticCfg(RslRlPpoActorCriticCfg):
+    """Corners-history actor with a privileged 20-D critic."""
+
+    class_name: str = "CornersTCNActorCritic"
+
+    history_length: int = 32
+    token_dim: int = 8
+    temporal_channels: int = 128
+
+    actor_hidden_dims: list[int] = [256, 256]
+    critic_hidden_dims: list[int] = [256, 256]
+    activation: str = "elu"
+
+@configclass
+class CornersAnchoredPPOCfg(RslRlPpoAlgorithmCfg):
+    class_name: str = "PPO"
+    dagger_anchor_coef: float = 100.0
+
+@configclass
 class QuadrotorAsymmetricPPORunnerCfg(RslRlOnPolicyRunnerCfg):
-    """Configuration for fine-tuning the distilled student via Asymmetric PPO."""
-    num_steps_per_env = 32
-    max_iterations = 1000
-    save_interval = 50
-    experiment_name = "CTBR_Hover_Asymmetric_PPO"
+    """
+    Phase-III asymmetric PPO fine-tuning.
+
+    Actor observation:
+        256-D analytic corners history.
+
+    Critic observation:
+        20-D privileged teacher state.
+    """
+
+    seed = 42
+    device = "cuda:0"
+
+    num_steps_per_env = 64
+    max_iterations = 100
+    save_interval = 10
+
+    experiment_name = "CTBR_Hover_Corners_Asymmetric_PPO"
     empirical_normalization = False
-    
-    policy = VisionActorCriticCfg(
-        # Low initial noise because the policy is already somewhat competent
-        init_noise_std=0.2,
-        use_gru=True,   # or False 
+    resume = False
+
+    obs_groups = {
+        "policy": ["policy"],
+        "critic": ["teacher"],
+    }
+
+    policy = CornersTCNActorCriticCfg(
+        init_noise_std=0.03,
+        noise_std_type="scalar",
+        history_length=32,
+        token_dim=8,
+        temporal_channels=128,
+        actor_hidden_dims=[256, 256],
+        critic_hidden_dims=[256, 256],
+        activation="elu",
     )
-    
-    algorithm = RslRlPpoAlgorithmCfg(
+
+    algorithm = CornersAnchoredPPOCfg(
+        dagger_anchor_coef=100.0,
+
         value_loss_coef=1.0,
         use_clipped_value_loss=True,
-        # Tighter clipping to prevent destroying the distilled weights
-        clip_param=0.1, 
+
+        clip_param=0.02,
         entropy_coef=0.0,
-        num_learning_epochs=5,
+
+        num_learning_epochs=1,
         num_mini_batches=4,
-        # Lower learning rate for fine-tuning
-        learning_rate=1.0e-4, 
-        schedule="adaptive",
+
+        learning_rate=3.0e-4,
+        schedule="fixed",
+
         gamma=0.99,
         lam=0.95,
         desired_kl=0.01,

@@ -230,6 +230,10 @@ class ArucoHoverEnvCfg(DirectRLEnvCfg):
     init_yaw_noise_end: float = 1.2
     init_pos_noise_start: list = [0.15, 0.15, 0.15]
     init_pos_noise_end: list = [0.4, 0.4, 0.4]
+    # Negative means normal automatic behavior.
+    # A value in [0, 1] freezes the reset distribution at that
+    # curriculum difficulty, which is useful for DAgger collection.
+    forced_curriculum_level: float = -1.0
     init_vel_noise: float = 0.1
     init_ang_vel_noise: float = 0.1
     # init_pos_noise_start: list = [0.0, 0.0, 0.0]
@@ -238,11 +242,16 @@ class ArucoHoverEnvCfg(DirectRLEnvCfg):
     # init_ang_vel_noise: float = 0.0
 
     # Performance-based curriculum thresholds
-    curriculum_step_size: float = 0.05        # fraction of [start, end] range advanced per promotion
-    curriculum_alignment_threshold: float = 0.85   # mean alignment_score needed to advance
-    curriculum_proximity_threshold: float = 0.7    # mean (gated) proximity reward needed to advance
+    # curriculum_step_size: float = 0.05        # fraction of [start, end] range advanced per promotion
+    # curriculum_alignment_threshold: float = 0.85   # mean alignment_score needed to advance
+    # curriculum_proximity_threshold: float = 0.7    # mean (gated) proximity reward needed to advance
     curriculum_demotion_factor: float = 0.5   # how much to step back on regression (vs step forward)
-    curriculum_eval_window: int = 20          # number of resets to average performance over before judging
+    # curriculum_eval_window: int = 20          # number of resets to average performance over before judging
+
+    curriculum_alignment_threshold: float = 0.90   # was 0.85
+    curriculum_proximity_threshold: float = 0.80   # was 0.70
+    curriculum_eval_window: int = 40               # was 20 — more stable signal
+    curriculum_step_size: float = 0.03            # was 0.05 — slower progression
 
     # ---------- Domain randomisation (multiplicative, fraction of nominal) ----------
     dr_dict: dict = {
@@ -298,11 +307,15 @@ class ArucoHoverEnvCfg(DirectRLEnvCfg):
     #     ),
     # )
 
+    # The corners policy does not require an RGB sensor.
+    # Enable this only when recording onboard video.
+    enable_onboard_camera: bool = True
+
     camera: TiledCameraCfg = TiledCameraCfg(
         prim_path="/World/envs/env_.*/Robot/body/Camera",  # changed: body/Camera not Robot/Camera
         update_period=1.0 / policy_rate_hz,
-        width=128,
-        height=128,
+        width=64,
+        height=64,
         data_types=["rgb"],
         spawn=sim_utils.PinholeCameraCfg(
             focal_length=24.0,
@@ -317,6 +330,13 @@ class ArucoHoverEnvCfg(DirectRLEnvCfg):
         ),
     )
 
+    # Number of consecutive RGB frames supplied to the student policy.
+    visual_history_length: int = 32
+    # Start clean. Add real-detector noise later.
+    corner_noise_px: float = 0.0
+    corner_dropout_prob: float = 0.0
+    marker_size: float = 0.10
+
     # ---------- Misc ----------
     scale_reward_with_time: bool = True  # multiply rewards by step_dt
     action_history_length: int = 1       # reserved for DAgger extension
@@ -324,8 +344,32 @@ class ArucoHoverEnvCfg(DirectRLEnvCfg):
 
 @configclass
 class ArucoHoverStudentEnvCfg(ArucoHoverEnvCfg):
-    """Student distillation cfg — spawns at max difficulty from the start."""
-    curriculum_enabled: bool = True
+    """
+    Corners-TCN student and DAgger environment.
+
+    Automatic curriculum is disabled. A fixed difficulty may be selected
+    through forced_curriculum_level.
+
+    The lateral-position and yaw ranges are deliberately restricted so a
+    corners-only policy normally receives an observable marker.
+    """
+
+    curriculum_enabled: bool = False
+    forced_curriculum_level: float = -1.0
+
+    # Depth and height remain strongly randomized.
+    # Lateral displacement is restricted to preserve marker visibility.
+    init_pos_noise_start: list = [0.15, 0.05, 0.15]
+    init_pos_noise_end: list = [0.40, 0.15, 0.40]
+
+    # Approximately ±2.9 degrees to ±10.3 degrees.
+    init_yaw_noise_start: float = 0.05
+    init_yaw_noise_end: float = 0.18
+
+    init_vel_noise: float = 0.10
+    init_ang_vel_noise: float = 0.10
+
+    visual_history_length: int = 32
 
 class ArucoHoverTeacherEnv(DirectRLEnv):
     """
@@ -408,7 +452,17 @@ class ArucoHoverTeacherEnv(DirectRLEnv):
         self.set_debug_vis(self.cfg.debug_vis)
 
         # ---------- Performance-based curriculum state ----------
-        self._curriculum_level = torch.tensor(0.0, device=self.device)  # scalar in [0, 1], shared across envs
+        initial_curriculum_level = (
+            float(self.cfg.forced_curriculum_level)
+            if self.cfg.forced_curriculum_level >= 0.0
+            else 0.0
+        )
+
+        self._curriculum_level = torch.tensor(
+            initial_curriculum_level,
+            device=self.device,
+            dtype=torch.float32,
+        )
         self._curriculum_alignment_buf = torch.zeros(self.cfg.curriculum_eval_window, device=self.device)
         self._curriculum_proximity_buf = torch.zeros(self.cfg.curriculum_eval_window, device=self.device)
         self._curriculum_buf_idx = 0
@@ -917,29 +971,62 @@ class ArucoHoverTeacherEnv(DirectRLEnv):
             self._thrust, self._moment, body_ids=self._body_id
         )
     
-    def _get_curriculum_noise(self) -> tuple[torch.Tensor, float]:
+    def _get_curriculum_noise(
+        self,
+    ) -> tuple[torch.Tensor, float]:
         """
-        Returns (pos_noise_tensor, yaw_noise_scalar) interpolated between
-        start/end values according to self._curriculum_level in [0, 1].
-        Level is updated by _update_curriculum() based on rolling performance,
-        not elapsed steps.
+        Return reset position and yaw ranges for the active difficulty.
+
+        Priority:
+        1. forced_curriculum_level when it is in [0, 1]
+        2. maximum difficulty when automatic curriculum is disabled
+        3. current performance-based curriculum level
         """
-        if not self.cfg.curriculum_enabled:
-            # Use max-difficulty noise so student sees diverse spawn states
-            return torch.tensor(self.cfg.init_pos_noise_end, device=self.device), self.cfg.init_yaw_noise_end
 
-        level = self._curriculum_level.item()
+        forced_level = float(
+            self.cfg.forced_curriculum_level
+        )
 
-        pos_start = torch.tensor(self.cfg.init_pos_noise_start, device=self.device)
-        pos_end   = torch.tensor(self.cfg.init_pos_noise_end, device=self.device)
-        pos_noise = pos_start + level * (pos_end - pos_start)
+        if forced_level >= 0.0:
+            level = max(
+                0.0,
+                min(1.0, forced_level),
+            )
+        elif not self.cfg.curriculum_enabled:
+            level = 1.0
+        else:
+            level = float(
+                self._curriculum_level.item()
+            )
+
+        pos_start = torch.tensor(
+            self.cfg.init_pos_noise_start,
+            device=self.device,
+            dtype=torch.float32,
+        )
+
+        pos_end = torch.tensor(
+            self.cfg.init_pos_noise_end,
+            device=self.device,
+            dtype=torch.float32,
+        )
+
+        pos_noise = (
+            pos_start
+            + level * (pos_end - pos_start)
+        )
 
         yaw_noise = (
             self.cfg.init_yaw_noise_start
-            + level * (self.cfg.init_yaw_noise_end - self.cfg.init_yaw_noise_start)
+            + level
+            * (
+                self.cfg.init_yaw_noise_end
+                - self.cfg.init_yaw_noise_start
+            )
         )
-        return pos_noise, yaw_noise
-    
+
+        return pos_noise, float(yaw_noise)
+        
     def _update_curriculum(self, env_ids: torch.Tensor):
         """
         Performance-gated curriculum update. Called once per reset batch.
@@ -947,7 +1034,10 @@ class ArucoHoverTeacherEnv(DirectRLEnv):
         components; promotes difficulty when both exceed threshold over a
         window of resets, demotes (partially) if performance regresses hard.
         """
-        if not self.cfg.curriculum_enabled:
+        if (
+            not self.cfg.curriculum_enabled
+            or self.cfg.forced_curriculum_level >= 0.0
+        ):
             return
 
         # Per-episode means for the envs that just reset, normalised the same
@@ -1266,7 +1356,20 @@ class ArucoHoverTeacherEnv(DirectRLEnv):
         extras["Episode_Termination/timeout"] = (
             self.reset_time_outs[env_ids].sum().item()
         )
-        extras["Curriculum/level"] = self._curriculum_level.item()   # NEW — log it
+        if self.cfg.forced_curriculum_level >= 0.0:
+            active_curriculum_level = float(
+                self.cfg.forced_curriculum_level
+            )
+        elif not self.cfg.curriculum_enabled:
+            active_curriculum_level = 1.0
+        else:
+            active_curriculum_level = float(
+                self._curriculum_level.item()
+            )
+
+        extras["Curriculum/level"] = (
+            active_curriculum_level
+        )
         self.extras.setdefault("log", {}).update(extras)
 
         # --------------2. Compute world-frame hover point for each env--------------------------
@@ -1295,9 +1398,13 @@ class ArucoHoverTeacherEnv(DirectRLEnv):
         super()._reset_idx(env_ids)
 
         # Stagger episode lengths to avoid simultaneous mass-resets
-        if len(env_ids) == self.num_envs:
+        if (
+            len(env_ids) == self.num_envs
+            and not getattr(self.cfg, "eval_mode", False)
+        ):
             self.episode_length_buf = torch.randint_like(
-                self.episode_length_buf, high=int(self.max_episode_length)
+                self.episode_length_buf,
+                high=int(self.max_episode_length),
             )
 
         n = len(env_ids)
@@ -1386,39 +1493,106 @@ class ArucoHoverStudentEnv(ArucoHoverTeacherEnv):
 
         # IMU bias (accel[3] + gyro[3]) per env, sampled at reset
         self._imu_bias = torch.zeros(self.num_envs, 6, device=self.device)
+        
+        # ------------------------------------------------------------------
+        # 32-step visual-corner history
+        # ------------------------------------------------------------------
+        K = self.cfg.visual_history_length
+
+        # Four corners × (u, v) = 8 values per timestamp.
+        self._corner_history = torch.zeros(
+            self.num_envs,
+            K,
+            8,
+            device=self.device,
+            dtype=torch.float32,
+        )
+
+        self._corner_history_initialized = torch.zeros(
+            self.num_envs,
+            device=self.device,
+            dtype=torch.bool,
+        )
+
+        half = self.cfg.marker_size / 2.0
+
+        # Marker lies in the world Y-Z plane.
+        self._marker_corner_offsets = torch.tensor(
+            [
+                [0.0, -half, -half],
+                [0.0,  half, -half],
+                [0.0,  half,  half],
+                [0.0, -half,  half],
+            ],
+            device=self.device,
+            dtype=torch.float32,
+        )
     
     def _setup_scene(self):
-        """Setup teacher scene, then attach onboard camera sensor."""
-        # 1. Let teacher create robot, walls, terrain, lights, etc.
-        super()._setup_scene()
-        
-        # 2. Create camera sensor using shared cfg
-        # self._camera = Camera(self.cfg.camera)
-        self._camera = TiledCamera(self.cfg.camera)
+        """Set up the shared scene and optionally create the RGB camera."""
 
-        # 3. Register camera with scene so InteractiveScene.reset() manages it
-        self.scene.sensors["onboard_camera"] = self._camera
+        # Create robot, marker, walls, terrain, and lighting.
+        super()._setup_scene()
+
+        self._camera = None
+
+        # Analytic corner projection does not require a rendered RGB camera.
+        if not self.cfg.enable_onboard_camera:
+            print(
+                "[INFO] Onboard RGB camera disabled. "
+                "Using analytic marker-corner observations only."
+            )
+            return
+
+        self._camera = TiledCamera(
+            self.cfg.camera
+        )
+
+        self.scene.sensors[
+            "onboard_camera"
+        ] = self._camera
 
         import omni.usd
         from pxr import Sdf
+
         stage = omni.usd.get_context().get_stage()
 
-        # With replicate_physics=True only env_0 exists at scene setup time
         src = "/World/envs/env_0/Robot/Camera"
         dst = "/World/envs/env_0/Robot/body/Camera"
 
         src_prim = stage.GetPrimAtPath(src)
-        dst_parent = stage.GetPrimAtPath("/World/envs/env_0/Robot/body")
 
-        if src_prim.IsValid() and dst_parent.IsValid():
+        dst_parent = stage.GetPrimAtPath(
+            "/World/envs/env_0/Robot/body"
+        )
+
+        if (
+            src_prim.IsValid()
+            and dst_parent.IsValid()
+        ):
             edit = Sdf.BatchNamespaceEdit()
-            edit.Add(Sdf.NamespaceEdit.Rename(
-                Sdf.Path(src), Sdf.Path(dst)
-            ))
-            stage.GetRootLayer().Apply(edit)
-            print("[INFO] Camera reparented to Robot/body/Camera")
+
+            edit.Add(
+                Sdf.NamespaceEdit.Rename(
+                    Sdf.Path(src),
+                    Sdf.Path(dst),
+                )
+            )
+
+            stage.GetRootLayer().Apply(
+                edit
+            )
+
+            print(
+                "[INFO] Camera reparented to "
+                "Robot/body/Camera"
+            )
         else:
-            print(f"[WARN] Reparent failed — src valid: {src_prim.IsValid()}, dst parent valid: {dst_parent.IsValid()}")
+            print(
+                "[WARN] Camera reparent failed — "
+                f"src valid: {src_prim.IsValid()}, "
+                f"dst parent valid: {dst_parent.IsValid()}"
+            )
 
     # --------------------------------------------------------------------------
     # Resets
@@ -1438,6 +1612,12 @@ class ArucoHoverStudentEnv(ArucoHoverTeacherEnv):
         accel_bias = torch.randn(len(env_ids), 3, device=self.device) * accel_bias_std
         gyro_bias  = torch.randn(len(env_ids), 3, device=self.device) * gyro_bias_std
         self._imu_bias[env_ids] = torch.cat([accel_bias, gyro_bias], dim=-1)
+
+        # This method may be called during parent initialization before the history
+        # buffers are created, hence the hasattr guard.
+        if hasattr(self, "_corner_history"):
+            self._corner_history[env_ids] = 0.0
+            self._corner_history_initialized[env_ids] = False
 
     # --------------------------------------------------------------------------
     # Observation helpers
@@ -1540,8 +1720,8 @@ class ArucoHoverStudentEnv(ArucoHoverTeacherEnv):
             cam_quat_w, self._marker_point_w - cam_pos_w   # (N, 3)
         )
 
-        W  = self.cfg.camera.width    # 128
-        H  = self.cfg.camera.height   # 128
+        W  = self.cfg.camera.width    # 64
+        H  = self.cfg.camera.height   # 64
         fx = W * 24.0 / 20.955        # ≈ 146.7 px
 
         MIN_DEPTH = 0.05  # below this, marker is behind/at the camera plane — projection is meaningless
@@ -1572,56 +1752,192 @@ class ArucoHoverStudentEnv(ArucoHoverTeacherEnv):
 
         vis_flag = visible.float()
         return torch.stack([cx, cy, apparent, apparent, vis_flag], dim=-1)  # (N, 5)
+    
+    def _compute_marker_corner_obs(self) -> torch.Tensor:
+        """
+        Return four normalized marker corners:
+
+            [u1, v1, u2, v2, u3, v3, u4, v4]
+
+        Invalid corners are represented by (-1, -1).
+        """
+
+        pos_w = self._robot.data.root_pos_w
+        quat_w = self._robot.data.root_quat_w
+
+        corners_w = (
+            self._marker_point_w[:, None, :]
+            + self._marker_corner_offsets[None, :, :]
+        )
+
+        relative_w = corners_w - pos_w[:, None, :]
+
+        quat_expanded = (
+            quat_w[:, None, :]
+            .expand(-1, 4, -1)
+            .reshape(-1, 4)
+        )
+
+        corners_b = quat_apply_inverse(
+            quat_expanded,
+            relative_w.reshape(-1, 3),
+        ).reshape(self.num_envs, 4, 3)
+
+        width = self.cfg.camera.width
+        height = self.cfg.camera.height
+
+        fx = width * 24.0 / 20.955
+        fy = fx
+
+        # Camera forward axis is body X.
+        depth = corners_b[..., 0]
+        safe_depth = depth.clamp(min=0.05)
+
+        u = (
+            -fx * corners_b[..., 1] / safe_depth
+            + width / 2.0
+        ) / width
+
+        v = (
+            -fy * corners_b[..., 2] / safe_depth
+            + height / 2.0
+        ) / height
+
+        valid = (
+            (depth > 0.05)
+            & (u >= 0.0)
+            & (u <= 1.0)
+            & (v >= 0.0)
+            & (v <= 1.0)
+        )
+
+        if not getattr(self.cfg, "eval_mode", False):
+            if self.cfg.corner_noise_px > 0.0:
+                u = (
+                    u
+                    + torch.randn_like(u)
+                    * self.cfg.corner_noise_px
+                    / width
+                )
+
+                v = (
+                    v
+                    + torch.randn_like(v)
+                    * self.cfg.corner_noise_px
+                    / height
+                )
+
+            if self.cfg.corner_dropout_prob > 0.0:
+                missing = (
+                    torch.rand_like(u)
+                    < self.cfg.corner_dropout_prob
+                )
+                valid = valid & ~missing
+
+        invalid = torch.full_like(u, -1.0)
+
+        u = torch.where(valid, u, invalid)
+        v = torch.where(valid, v, invalid)
+
+        return torch.stack(
+            [u, v],
+            dim=-1,
+        ).reshape(self.num_envs, 8)
 
     # --------------------------------------------------------------------------
     # Main observation API
     # --------------------------------------------------------------------------
 
     def _get_observations(self) -> dict:
-        """Return full-image + IMU + privileged state + full_state."""
-        
-        # 1) Camera RGB (may fail when renderer is out of resources)
-        rgb = None
-        if self._camera is not None:
-            rgb = self._camera.data.output.get("rgb", None)
+        """Return four RGB frames, previous action, and privileged training state."""
 
-        if rgb is not None and rgb.ndim == 4:
-            # rgb: (N, H, W, C)
-            if rgb.shape[-1] == 4:
-                rgb = rgb[..., :3]
-            rgb = rgb.to(dtype=torch.float32) / 255.0
-            rgb = rgb.permute(0, 3, 1, 2).contiguous()  # (N, 3, H, W)
-        else:
-            # Fallback dummy images; current student policy ignores images anyway
-            N = self.num_envs
-            H, W = self.cfg.camera.height, self.cfg.camera.width
-            rgb = torch.zeros(N, 3, H, W, device=self.device)
+        # ------------------------------------------------------------------
+        # 1. Current projected ArUco corners
+        # ------------------------------------------------------------------
+        corner_obs = self._compute_marker_corner_obs()
 
-        # 2) IMU-like vector with noise/bias
-        imu_obs = self._compute_imu_obs()
+        was_initialized = self._corner_history_initialized.clone()
+        not_initialized = ~was_initialized
 
-        # 3) Privileged teacher observation (clean)
+        # On reset, fill all 32 timestamps using the first observation.
+        if not_initialized.any():
+            self._corner_history[not_initialized] = (
+                corner_obs[not_initialized]
+                .unsqueeze(1)
+                .expand(
+                    -1,
+                    self.cfg.visual_history_length,
+                    -1,
+                )
+            )
+
+            self._corner_history_initialized[not_initialized] = True
+
+        # Shift already-running histories by one timestamp.
+        if was_initialized.any():
+            history = self._corner_history[was_initialized].clone()
+
+            history[:, :-1] = history[:, 1:].clone()
+            history[:, -1] = corner_obs[was_initialized]
+
+            self._corner_history[was_initialized] = history
+
+        policy_obs = self._corner_history.reshape(
+            self.num_envs,
+            -1,
+        )
+
+        expected_policy_dim = (
+            self.cfg.visual_history_length * 8
+        )
+
+        assert policy_obs.shape[-1] == expected_policy_dim, (
+            f"Policy observation dimension is "
+            f"{policy_obs.shape[-1]}, expected {expected_policy_dim}"
+        )
+
+        # ------------------------------------------------------------------
+        # 3. Privileged teacher/critic state
+        # ------------------------------------------------------------------
         teacher_obs = self._compute_teacher_obs()
 
-        # 4) Full-state logging vector (18-D), as your eval script expects
+        assert teacher_obs.shape[-1] == 20, (
+            f"Teacher observation must be 20-D, got {teacher_obs.shape[-1]}"
+        )
+
+        # ------------------------------------------------------------------
+        # 4. Full-state evaluation vector
+        # ------------------------------------------------------------------
         pos_w = self._robot.data.root_pos_w
         ori_w = self._robot.data.root_quat_w
-        lv_w  = self._robot.data.root_lin_vel_w
-        av_b  = self._robot.data.root_ang_vel_b
-        dist  = torch.linalg.norm(self._hover_point_w - pos_w, dim=-1, keepdim=True)
+        lv_w = self._robot.data.root_lin_vel_w
+        av_b = self._robot.data.root_ang_vel_b
+
+        dist = torch.linalg.norm(
+            self._hover_point_w - pos_w,
+            dim=-1,
+            keepdim=True,
+        )
 
         full_state = torch.cat(
-            [pos_w, ori_w, lv_w, av_b, self._previous_action, dist],
+            [
+                pos_w,
+                ori_w,
+                lv_w,
+                av_b,
+                self._previous_action,
+                dist,
+            ],
             dim=-1,
-        )  # (N, 18)
-
-        img_flat = rgb.view(self.num_envs, -1)                      # (N, 3*64*64) = (N, 12288)
-        policy_flat = torch.cat([imu_obs, img_flat], dim=-1)        # (N, 13 + 12288 = 12301)
+        )
 
         return {
-            "policy":     policy_flat,
-            "teacher":    teacher_obs,
-            "critic":     teacher_obs,
+            "policy": policy_obs,
+            "teacher": teacher_obs,
+            "critic": teacher_obs,
             "full_state": full_state,
-            "bbox_gt":    self._compute_bbox_gt(),                  # (N, 5): [cx, cy, w, h, visible_flag]
+
+            # # Leave this temporarily if AuxDistillation currently expects it.
+            # # Its loss weight is zero, so it does not affect the student.
+            # "bbox_gt": self._compute_bbox_gt(),
         }
