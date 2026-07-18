@@ -5,28 +5,60 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import importlib.util
 import json
 import math
 import random
 import subprocess
-import sys
 from pathlib import Path
-
-from isaaclab.app import AppLauncher
-
-launcher_parser = argparse.ArgumentParser(add_help=False)
-AppLauncher.add_app_launcher_args(launcher_parser)
-launcher_args, remaining_args = launcher_parser.parse_known_args()
-launcher_args.headless = True
-launcher_args.enable_cameras = False
-app_launcher = AppLauncher(launcher_args)
-simulation_app = app_launcher.app
-sys.argv = [sys.argv[0]] + remaining_args
 
 import torch
 import torch.nn.functional as F
 
-from envs.aruco_hover.agents.vision_student_teacher import VisionStudentTeacher
+
+def _load_vision_student_teacher_class():
+    """Load the policy definition without registering Isaac Lab tasks.
+
+    Importing ``envs.aruco_hover.agents`` normally executes ``envs/__init__.py``
+    and the Gym environment-registration package. Offline supervised training
+    requires only the pure-PyTorch policy definition.
+    """
+
+    module_path = (
+        Path(__file__).resolve().parents[1]
+        / "envs"
+        / "aruco_hover"
+        / "agents"
+        / "vision_student_teacher.py"
+    )
+
+    if not module_path.is_file():
+        raise FileNotFoundError(
+            f"Policy module does not exist: {module_path}"
+        )
+
+    spec = importlib.util.spec_from_file_location(
+        "_corners_vision_student_teacher",
+        module_path,
+    )
+
+    if spec is None or spec.loader is None:
+        raise ImportError(
+            f"Could not construct an import specification for {module_path}"
+        )
+
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    try:
+        return module.VisionStudentTeacher
+    except AttributeError as error:
+        raise ImportError(
+            f"VisionStudentTeacher is missing from {module_path}"
+        ) from error
+
+
+VisionStudentTeacher = _load_vision_student_teacher_class()
 
 ACTION_NAMES = ("thrust", "roll", "pitch", "yaw")
 
@@ -402,7 +434,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    finally:
-        simulation_app.close()
+    main()
