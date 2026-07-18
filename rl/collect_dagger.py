@@ -7,6 +7,7 @@
 
 import argparse
 import glob
+import hashlib
 import os
 import sys
 
@@ -111,9 +112,8 @@ AppLauncher.add_app_launcher_args(parser)
 
 args_cli, hydra_args = parser.parse_known_args()
 
-# Your current student environment still constructs a TiledCamera.
-# Leave this True until camera creation is made optional.
-args_cli.enable_cameras = True
+# Analytic 256-D corner histories do not require rendered RGB cameras.
+args_cli.enable_cameras = False
 args_cli.headless = True
 
 sys.argv = [sys.argv[0]] + hydra_args
@@ -155,6 +155,24 @@ opr.VisionStudentTeacher = VisionStudentTeacher
 
 rsl_rl_algorithms.Distillation = AuxDistillation
 opr.Distillation = AuxDistillation
+
+
+def _sha256_file(path: str | None) -> str | None:
+    """Return the SHA-256 digest of a checkpoint, or None."""
+
+    if path is None:
+        return None
+
+    digest = hashlib.sha256()
+
+    with open(path, "rb") as file:
+        for chunk in iter(
+            lambda: file.read(1024 * 1024),
+            b"",
+        ):
+            digest.update(chunk)
+
+    return digest.hexdigest()
 
 
 # =============================================================================
@@ -214,6 +232,16 @@ def main(
     env_cfg.scene.num_envs = args_cli.num_envs
     env_cfg.seed = args_cli.seed
     agent_cfg.seed = args_cli.seed
+
+    # Fresh corners-only collection uses analytic projection only.
+    if hasattr(env_cfg, "enable_onboard_camera"):
+        env_cfg.enable_onboard_camera = False
+
+    if hasattr(env_cfg, "visual_dr_enabled"):
+        env_cfg.visual_dr_enabled = False
+
+    if hasattr(env_cfg, "debug_vis"):
+        env_cfg.debug_vis = False
 
     if args_cli.curriculum_level is not None:
         if not 0.0 <= args_cli.curriculum_level <= 1.0:
@@ -305,7 +333,7 @@ def main(
     env = gym.make(
         args_cli.task,
         cfg=env_cfg,
-        render_mode="rgb_array",
+        render_mode=None,
     )
 
     env = RslRlVecEnvWrapper(
@@ -362,6 +390,14 @@ def main(
         print("[INFO] Offline student loaded.")
 
     policy.eval()
+
+    teacher_checkpoint_sha256 = _sha256_file(
+        args_cli.teacher_checkpoint
+    )
+
+    student_checkpoint_sha256 = _sha256_file(
+        args_cli.student_checkpoint
+    )
 
     # -------------------------------------------------------------------------
     # Obtain initial observation groups
@@ -422,7 +458,8 @@ def main(
     shard_index = 0
 
     candidate_samples_seen = 0
-    rejected_no_marker_count = 0
+    fully_missing_history_count = 0
+    partially_missing_history_count = 0
 
     teacher_mask = None
     controller_step = 0
@@ -511,10 +548,13 @@ def main(
                 )
 
             # --------------------------------------------------------------
-            # Reject only histories where the marker was never visible.
+            # Retain every episode-safe 32-frame history.
             #
-            # A completely invalid 32-frame history contains no information
-            # about whether positive or negative teacher yaw is required.
+            # The environment resets its temporal buffer by repeating the
+            # first post-reset corner observation over all 32 timestamps.
+            # Therefore these samples do not cross episode boundaries.
+            #
+            # Fully missing histories remain valid training examples.
             # --------------------------------------------------------------
             corner_history = policy_obs.reshape(
                 policy_obs.shape[0],
@@ -530,50 +570,50 @@ def main(
                 & (corner_history[..., 1] <= 1.0)
             )
 
-            # Shape: (num_envs, 32). True when at least one corner was
-            # visible in a particular temporal frame.
-            any_corner_visible_per_frame = (
-                valid_corner.any(dim=2)
+            history_has_marker = (
+                valid_corner
+                .any(dim=2)
+                .any(dim=1)
             )
 
-            # Keep the history when at least one marker corner was visible
-            # at least once during the complete temporal window.
-            history_has_marker = (
-                any_corner_visible_per_frame.any(dim=1)
+            missing_coordinate = policy_obs.eq(-1.0)
+
+            fully_missing_history = ~history_has_marker
+
+            partially_missing_history = (
+                missing_coordinate.any(dim=1)
+                & history_has_marker
             )
 
             candidate_samples_seen += int(
                 policy_obs.shape[0]
             )
 
-            rejected_no_marker_count += int(
-                (~history_has_marker).sum().item()
+            fully_missing_history_count += int(
+                fully_missing_history.sum().item()
             )
 
-            valid_indices = torch.nonzero(
-                history_has_marker,
-                as_tuple=False,
-            ).flatten()
+            partially_missing_history_count += int(
+                partially_missing_history.sum().item()
+            )
 
             remaining = (
                 args_cli.num_samples
                 - samples_collected
             )
 
-            if (
-                remaining > 0
-                and valid_indices.numel() > 0
-            ):
-                valid_indices = valid_indices[
-                    :remaining
-                ]
+            take_count = min(
+                remaining,
+                int(policy_obs.shape[0]),
+            )
 
+            if take_count > 0:
                 selected_observations = policy_obs[
-                    valid_indices
+                    :take_count
                 ]
 
                 selected_teacher_actions = teacher_action[
-                    valid_indices
+                    :take_count
                 ]
 
                 observation_buffer.append(
@@ -583,8 +623,8 @@ def main(
                     .to(torch.float32)
                 )
 
-                # The label is always the privileged teacher action,
-                # regardless of which controller was executed.
+                # The teacher labels every visited state, regardless of which
+                # controller generated the transition.
                 action_buffer.append(
                     selected_teacher_actions
                     .detach()
@@ -592,12 +632,8 @@ def main(
                     .to(torch.float32)
                 )
 
-                accepted_count = int(
-                    valid_indices.numel()
-                )
-
-                samples_collected += accepted_count
-                buffered_samples += accepted_count
+                samples_collected += take_count
+                buffered_samples += take_count
 
             should_save = (
                 buffered_samples > 0
@@ -633,9 +669,30 @@ def main(
                         "observations": observations_to_save,
                         "teacher_actions": actions_to_save,
 
-                        "round_index": args_cli.round_index,
-                        "teacher_probability":
-                            args_cli.teacher_probability,
+                        "schema_version": "corners_dagger_v1",
+                        "task": str(args_cli.task),
+                        "seed": int(args_cli.seed),
+
+                        "round_index": int(
+                            args_cli.round_index
+                        ),
+
+                        "shard_index": int(
+                            shard_index
+                        ),
+
+                        "sample_count": int(
+                            observations_to_save.shape[0]
+                        ),
+
+                        "teacher_probability": float(
+                            args_cli.teacher_probability
+                        ),
+
+                        "student_probability": float(
+                            1.0
+                            - args_cli.teacher_probability
+                        ),
 
                         "curriculum_level":
                             args_cli.curriculum_level,
@@ -655,20 +712,42 @@ def main(
                         "history_length": 32,
                         "token_dim": 8,
 
-                        "controller_hold_steps":
-                            args_cli.controller_hold_steps,
+                        "controller_hold_steps": int(
+                            args_cli.controller_hold_steps
+                        ),
 
-                        "observation_dtype":
-                            "float32",
+                        "observation_dtype": "float32",
+                        "action_dtype": "float32",
+                        "action_range": [-1.0, 1.0],
 
-                        "invalid_history_filter":
-                            "any_corner_visible_at_least_once",
+                        "all_histories_retained": True,
 
-                        "candidate_samples_seen":
+                        "teacher_checkpoint": os.path.abspath(
+                            args_cli.teacher_checkpoint
+                        ),
+
+                        "teacher_checkpoint_sha256":
+                            teacher_checkpoint_sha256,
+
+                        "student_checkpoint": (
+                            os.path.abspath(
+                                args_cli.student_checkpoint
+                            )
+                            if args_cli.student_checkpoint is not None
+                            else None
+                        ),
+
+                        "student_checkpoint_sha256":
+                            student_checkpoint_sha256,
+
+                        "candidate_samples_seen_cumulative":
                             candidate_samples_seen,
 
-                        "rejected_no_marker_count":
-                            rejected_no_marker_count,
+                        "fully_missing_history_count_cumulative":
+                            fully_missing_history_count,
+
+                        "partially_missing_history_count_cumulative":
+                            partially_missing_history_count,
                     },
                     shard_path,
                 )
@@ -707,9 +786,15 @@ def main(
 
     env.close()
 
-    rejection_percentage = (
+    fully_missing_percentage = (
         100.0
-        * rejected_no_marker_count
+        * fully_missing_history_count
+        / max(candidate_samples_seen, 1)
+    )
+
+    partially_missing_percentage = (
+        100.0
+        * partially_missing_history_count
         / max(candidate_samples_seen, 1)
     )
 
@@ -717,35 +802,54 @@ def main(
     print("=" * 72)
     print("DAGGER COLLECTION SUMMARY")
     print("=" * 72)
+
     print(
         f"Accepted samples:            "
         f"{samples_collected}"
     )
+
     print(
         f"Candidate samples seen:      "
         f"{candidate_samples_seen}"
     )
+
     print(
-        f"All-invalid histories:       "
-        f"{rejected_no_marker_count} "
-        f"({rejection_percentage:.3f}%)"
+        f"Fully missing histories:     "
+        f"{fully_missing_history_count} "
+        f"({fully_missing_percentage:.3f}%)"
     )
+
+    print(
+        f"Partially missing histories: "
+        f"{partially_missing_history_count} "
+        f"({partially_missing_percentage:.3f}%)"
+    )
+
     print(
         f"Shards:                      "
         f"{shard_index}"
     )
+
     print(
         f"Curriculum level:            "
         f"{args_cli.curriculum_level}"
     )
+
     print(
         f"Teacher probability:         "
         f"{args_cli.teacher_probability}"
     )
+
+    print(
+        f"Student probability:         "
+        f"{1.0 - args_cli.teacher_probability}"
+    )
+
     print(
         f"Controller hold steps:       "
         f"{args_cli.controller_hold_steps}"
     )
+
     print("=" * 72)
 
 
