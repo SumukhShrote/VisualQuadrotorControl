@@ -884,10 +884,21 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg,
             "extras['observations']."
         )
 
-    if obs_dict["policy"].shape[-1] != 256:
-        raise RuntimeError(
-            f"Expected a 256-D corners history, got "
-            f"{obs_dict['policy'].shape}."
+    policy_observations = obs_dict["policy"]
+
+    # A separately loaded corners-only student consumes the flattened
+    # 32-frame x 8-coordinate history. Native RSL-RL policies consume
+    # the observation dimension defined by their environment/task.
+    if args_cli.student_checkpoint is not None:
+        if policy_observations.shape[-1] != 256:
+            raise RuntimeError(
+                "Expected a 256-D corners history for the offline "
+                f"student, got {policy_observations.shape}."
+            )
+    else:
+        print(
+            "[INFO] Native RSL-RL policy observation dimension:",
+            policy_observations.shape[-1],
         )
 
     full_state = obs_dict.get(
@@ -1018,58 +1029,56 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg,
 
             while steps < max_steps:
                 full_states[:, steps, :] = obs_dict["full_state"]
-                # ------------------------------------------------------------------
-                # Extract the newest corner observation directly from policy input.
-                #
-                # policy observation shape:
-                #     (num_envs, 256)
-                #
-                # reshaped:
-                #     (num_envs, 32 timestamps, 8 corner coordinates)
-                # ------------------------------------------------------------------
-                policy_history = obs_dict["policy"].reshape(
-                    args_cli.num_envs,
-                    32,
-                    8,
-                )
+                # Corner-history extraction is only valid for the separately
+                # loaded 256-D corners student. Native RSL-RL policies, such as
+                # the 20-D teacher, bypass all corner-specific diagnostics.
+                latest_policy_corners = None
+                corners_overlay = None
 
-                latest_policy_corners = policy_history[
-                    record_env_idx,
-                    -1,
-                ].reshape(4, 2)
-
-                corners_overlay = (
-                    latest_policy_corners
-                    .detach()
-                    .cpu()
-                    .numpy()
-                )
-
-                if args_cli.debug_corners and steps < 10:
-                    print(
-                        f"\n[CORNER DEBUG] step={steps}"
+                if args_cli.student_checkpoint is not None:
+                    policy_history = obs_dict["policy"].reshape(
+                        args_cli.num_envs,
+                        32,
+                        8,
                     )
 
-                    for corner_index in range(4):
-                        u_value = float(
-                            latest_policy_corners[
-                                corner_index,
-                                0,
-                            ].item()
-                        )
+                    latest_policy_corners = policy_history[
+                        record_env_idx,
+                        -1,
+                    ].reshape(4, 2)
 
-                        v_value = float(
-                            latest_policy_corners[
-                                corner_index,
-                                1,
-                            ].item()
-                        )
+                    corners_overlay = (
+                        latest_policy_corners
+                        .detach()
+                        .cpu()
+                        .numpy()
+                    )
 
+                    if args_cli.debug_corners and steps < 10:
                         print(
-                            f"  corner {corner_index}: "
-                            f"u={u_value:.5f}, "
-                            f"v={v_value:.5f}"
+                            f"\n[CORNER DEBUG] step={steps}"
                         )
+
+                        for corner_index in range(4):
+                            u_value = float(
+                                latest_policy_corners[
+                                    corner_index,
+                                    0,
+                                ].item()
+                            )
+
+                            v_value = float(
+                                latest_policy_corners[
+                                    corner_index,
+                                    1,
+                                ].item()
+                            )
+
+                            print(
+                                f"  corner {corner_index}: "
+                                f"u={u_value:.5f}, "
+                                f"v={v_value:.5f}"
+                            )
 
                 # ---- Policy forward pass -----------------------------------
                 # agent() calls act_inference -> update_distribution -> _encode
