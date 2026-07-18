@@ -1,11 +1,51 @@
-logs/
-outputs/
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+*.so
 *.egg-info/
-dist/
-build/
-*.pt
-*.onnx
-*.engine
-models/*.usd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ---------------------------------------------------------------------------
+# Virtual environments and editors
+# ---------------------------------------------------------------------------
+.venv/
+venv/
+env/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ---------------------------------------------------------------------------
+# Isaac Lab / Hydra / experiment output
+# ---------------------------------------------------------------------------
+outputs/
+logs/
+eval_logs/
+videos/
+checkpoints/
+dagger_data/
+wandb/
+.hydra/
+*.log
+
+# ---------------------------------------------------------------------------
+# Generated local files
+# ---------------------------------------------------------------------------
+models/textures/generated/
+AerialCatching_source_precleanup.tar.gz
+AerialCatching_dagger_precleanup.tar.gz
+
+# ---------------------------------------------------------------------------
+# Operating-system files
+# ---------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
