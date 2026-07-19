@@ -176,6 +176,23 @@ def main() -> None:
     parser.add_argument("--min_learning_rate", type=float, default=1.0e-5)
     parser.add_argument("--gradient_clip_norm", type=float, default=1.0)
     parser.add_argument("--max_samples_per_shard", type=int, default=None)
+    parser.add_argument(
+        "--init_checkpoint",
+        type=Path,
+        default=None,
+        help=(
+            "Initialize the student from a DAgger checkpoint. "
+            "The student state is loaded strictly."
+        ),
+    )
+    parser.add_argument(
+        "--resume_optimizer",
+        action="store_true",
+        help=(
+            "Also restore optimizer state from --init_checkpoint. "
+            "Requires --init_checkpoint."
+        ),
+    )
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
 
@@ -185,6 +202,10 @@ def main() -> None:
         parser.error("validation_fraction must be in (0, 1)")
     if args.manifest is not None and not args.manifest.is_file():
         raise FileNotFoundError(args.manifest)
+    if args.init_checkpoint is not None and not args.init_checkpoint.is_file():
+        raise FileNotFoundError(args.init_checkpoint)
+    if args.resume_optimizer and args.init_checkpoint is None:
+        parser.error("--resume_optimizer requires --init_checkpoint")
 
     last_checkpoint = args.output_checkpoint.with_name(
         f"{args.output_checkpoint.stem}_last{args.output_checkpoint.suffix}"
@@ -243,10 +264,90 @@ def main() -> None:
         del observations
 
     model = build_model(args.device)
+
+    init_payload = None
+    init_checkpoint_sha256 = None
+    parent_epoch = 0
+
+    if args.init_checkpoint is not None:
+        init_payload = torch.load(
+            args.init_checkpoint,
+            map_location="cpu",
+            weights_only=False,
+        )
+
+        if "student_state_dict" not in init_payload:
+            raise KeyError(
+                f"{args.init_checkpoint}: missing student_state_dict"
+            )
+
+        expected_metadata = {
+            "num_student_obs": 256,
+            "num_teacher_obs": 20,
+            "num_actions": 4,
+            "history_length": 32,
+            "token_dim": 8,
+            "temporal_channels": 128,
+        }
+
+        for key, expected in expected_metadata.items():
+            if key in init_payload:
+                actual = int(init_payload[key])
+                if actual != expected:
+                    raise ValueError(
+                        f"{args.init_checkpoint}: {key}={actual}, "
+                        f"expected {expected}"
+                    )
+
+        model.student.load_state_dict(
+            init_payload["student_state_dict"],
+            strict=True,
+        )
+
+        parent_epoch = int(init_payload.get("epoch", 0))
+        init_checkpoint_sha256 = sha256_file(
+            args.init_checkpoint
+        )
+
+        print(
+            "[INIT] Loaded student strictly from:",
+            args.init_checkpoint,
+        )
+        print("[INIT] Parent epoch:", parent_epoch)
+        print(
+            "[INIT] Parent checkpoint SHA256:",
+            init_checkpoint_sha256,
+        )
     optimizer = torch.optim.Adam(
         model.student.parameters(),
         lr=args.learning_rate,
     )
+
+    if args.resume_optimizer:
+        if init_payload is None:
+            raise RuntimeError(
+                "Internal error: optimizer resume without init payload"
+            )
+        if "optimizer_state_dict" not in init_payload:
+            raise KeyError(
+                f"{args.init_checkpoint}: "
+                "missing optimizer_state_dict"
+            )
+
+        optimizer.load_state_dict(
+            init_payload["optimizer_state_dict"]
+        )
+
+        # torch.load(..., map_location="cpu") places optimizer tensors
+        # on CPU. Move them to the requested training device.
+        for state in optimizer.state.values():
+            for key, value in list(state.items()):
+                if torch.is_tensor(value):
+                    state[key] = value.to(args.device)
+
+        print(
+            "[INIT] Restored optimizer state from parent checkpoint"
+        )
 
     args.metrics_csv.parent.mkdir(parents=True, exist_ok=True)
     metrics_file = args.metrics_csv.open("w", encoding="utf-8", newline="")
@@ -363,6 +464,14 @@ def main() -> None:
             best_validation_mse = validation_mse
 
         checkpoint = {
+            "init_checkpoint": (
+                str(args.init_checkpoint.resolve())
+                if args.init_checkpoint is not None
+                else None
+            ),
+            "init_checkpoint_sha256": init_checkpoint_sha256,
+            "resume_optimizer": bool(args.resume_optimizer),
+            "parent_epoch": parent_epoch,
             "student_state_dict": model.student.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
             "epoch": epoch,
