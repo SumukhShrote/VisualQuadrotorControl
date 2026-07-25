@@ -1,0 +1,24 @@
+# RGB-only R2-Dreamer integration for AerialCatching.
+task: "isaaclab_Isaac-QuadrotorHoverStudent-v0"
+task_registration_module: "envs.aruco_hover"
+
+steps: 2048
+env_num: 2
+eval_episode_num: 0
+
+action_repeat: 1
+train_ratio: 1
+
+headless: true
+seed: ${seed}
+device: ${device}
+
+size: [64, 64]
+
+encoder:
+  mlp_keys: "$^"
+  cnn_keys: "image"
+
+decoder:
+  mlp_keys: "$^"
+  cnn_keys: "image"

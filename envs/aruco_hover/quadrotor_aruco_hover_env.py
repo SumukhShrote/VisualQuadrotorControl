@@ -1254,6 +1254,23 @@ class ArucoHoverTeacherEnv(DirectRLEnv):
         died    = too_far | too_tilted | too_low
         timeout = self.episode_length_buf >= self.max_episode_length - 1
 
+        # Export exact existing termination conditions for dataset provenance.
+        # These clones are observational only and do not alter done behavior.
+        termination_bitmask = (
+            too_far.to(torch.int16)
+            | (too_tilted.to(torch.int16) << 1)
+            | (too_low.to(torch.int16) << 2)
+            | (timeout.to(torch.int16) << 3)
+        )
+
+        self.extras["termination_provenance"] = {
+            "too_far": too_far.detach().clone(),
+            "too_tilted": too_tilted.detach().clone(),
+            "too_low": too_low.detach().clone(),
+            "timeout": timeout.detach().clone(),
+            "bitmask": termination_bitmask.detach().clone(),
+        }
+
         return died, timeout
 
     def _domain_randomise(self, env_ids: torch.Tensor):
@@ -1514,6 +1531,15 @@ class ArucoHoverStudentEnv(ArucoHoverTeacherEnv):
             dtype=torch.bool,
         )
 
+        # Prevent duplicate observation queries from advancing the temporal
+        # history more than once during the same policy step.
+        self._corner_history_step_stamp = torch.full(
+            (self.num_envs,),
+            -1,
+            device=self.device,
+            dtype=torch.long,
+        )
+
         half = self.cfg.marker_size / 2.0
 
         # Marker lies in the world Y-Z plane.
@@ -1618,6 +1644,7 @@ class ArucoHoverStudentEnv(ArucoHoverTeacherEnv):
         if hasattr(self, "_corner_history"):
             self._corner_history[env_ids] = 0.0
             self._corner_history_initialized[env_ids] = False
+            self._corner_history_step_stamp[env_ids] = -1
 
     # --------------------------------------------------------------------------
     # Observation helpers
@@ -1856,10 +1883,14 @@ class ArucoHoverStudentEnv(ArucoHoverTeacherEnv):
         # ------------------------------------------------------------------
         corner_obs = self._compute_marker_corner_obs()
 
+        current_history_step = self.episode_length_buf.to(
+            dtype=torch.long
+        )
+
         was_initialized = self._corner_history_initialized.clone()
         not_initialized = ~was_initialized
 
-        # On reset, fill all 32 timestamps using the first observation.
+        # On reset, fill all 32 timestamps with the first corner observation.
         if not_initialized.any():
             self._corner_history[not_initialized] = (
                 corner_obs[not_initialized]
@@ -1872,15 +1903,30 @@ class ArucoHoverStudentEnv(ArucoHoverTeacherEnv):
             )
 
             self._corner_history_initialized[not_initialized] = True
+            self._corner_history_step_stamp[not_initialized] = (
+                current_history_step[not_initialized]
+            )
 
-        # Shift already-running histories by one timestamp.
-        if was_initialized.any():
-            history = self._corner_history[was_initialized].clone()
+        # Advance only once for each environment policy step. Repeated calls
+        # to get_observations() during the same step return the cached history.
+        advance_history = (
+            was_initialized
+            & (
+                self._corner_history_step_stamp
+                != current_history_step
+            )
+        )
+
+        if advance_history.any():
+            history = self._corner_history[advance_history].clone()
 
             history[:, :-1] = history[:, 1:].clone()
-            history[:, -1] = corner_obs[was_initialized]
+            history[:, -1] = corner_obs[advance_history]
 
-            self._corner_history[was_initialized] = history
+            self._corner_history[advance_history] = history
+            self._corner_history_step_stamp[advance_history] = (
+                current_history_step[advance_history]
+            )
 
         policy_obs = self._corner_history.reshape(
             self.num_envs,

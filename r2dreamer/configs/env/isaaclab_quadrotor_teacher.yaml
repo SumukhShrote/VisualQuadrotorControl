@@ -1,0 +1,25 @@
+# Initial low-dimensional integration for the privileged teacher environment.
+task: "isaaclab_Isaac-QuadrotorHoverTeacher-v0"
+task_registration_module: "envs.aruco_hover"
+
+steps: 5.1e5
+env_num: 16
+eval_episode_num: 0
+
+action_repeat: 1
+train_ratio: 512
+
+headless: true
+seed: ${seed}
+device: ${device}
+
+# Required by the common Isaac Lab wrapper, although this first task is state-based.
+size: [64, 64]
+
+encoder:
+  mlp_keys: "policy"
+  cnn_keys: "$^"
+
+decoder:
+  mlp_keys: "policy"
+  cnn_keys: "$^"

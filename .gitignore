@@ -17,7 +17,7 @@ htmlcov/
 # ---------------------------------------------------------------------------
 .venv/
 venv/
-env/
+/env/
 .vscode/
 .idea/
 *.swp
@@ -49,3 +49,16 @@ AerialCatching_dagger_precleanup.tar.gz
 # ---------------------------------------------------------------------------
 .DS_Store
 Thumbs.db
+
+# Dreamer generated artifacts
+r2dreamer/__pycache__/
+r2dreamer/**/__pycache__/
+r2dreamer/**/*.pyc
+r2dreamer/**/*.pt
+r2dreamer/**/*.mp4
+r2dreamer/**/*.log
+r2dreamer/replay/
+r2dreamer/wandb/
+logs/r2dreamer/
+
+# Keep Dreamer environment configs tracked
