@@ -76,6 +76,14 @@ opr.VisionStudentTeacher = VisionStudentTeacher
 opr.VisionActorCritic = VisionActorCritic
 opr.CornersTCNActorCritic = CornersTCNActorCritic
 
+from controllers.corners_asymmetric_policy import (
+    CornersAsymmetricActorCritic,
+)
+
+opr.CornersAsymmetricActorCritic = (
+    CornersAsymmetricActorCritic
+)
+
 from isaaclab.utils.io import load_yaml
 
 
@@ -718,6 +726,37 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg,
     )
 
     if args_cli.video:
+        video_fps = getattr(env_cfg, "policy_rate_hz", None)
+
+        if video_fps is None:
+            sim_cfg = getattr(env_cfg, "sim", None)
+            sim_dt = getattr(sim_cfg, "dt", None)
+            decimation = getattr(env_cfg, "decimation", None)
+
+            if sim_dt is not None and decimation is not None:
+                video_fps = 1.0 / (
+                    float(sim_dt) * float(decimation)
+                )
+
+        if video_fps is None:
+            video_fps = 50.0
+            print(
+                "[WARN] Could not infer the environment video FPS. "
+                "Using 50 FPS."
+            )
+
+        envs.metadata = dict(
+            getattr(envs, "metadata", {}) or {}
+        )
+        envs.metadata["render_fps"] = int(
+            round(float(video_fps))
+        )
+
+        print(
+            "[INFO] Third-person video FPS: "
+            f"{envs.metadata['render_fps']}"
+        )
+
         envs = gym.wrappers.RecordVideo(
             envs,
             **video_kwargs,
@@ -727,7 +766,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg,
     # ---- Onboard camera recorder -------------------------------------------
     onboard_recorder = None
 
-    if args_cli.video:
+    if (
+        args_cli.video
+        and getattr(envs.unwrapped, "_camera", None) is not None
+    ):
         cam_h = env_cfg.camera.height
         cam_w = env_cfg.camera.width
 
@@ -747,6 +789,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg,
             img_w=cam_w,
             fps=env_cfg.policy_rate_hz,
             upscale=8,
+        )
+
+    elif args_cli.video:
+        print(
+            "[INFO] This environment has no onboard camera. "
+            "Skipping onboard-camera MP4; third-person video remains enabled."
         )
 
     # ---- Load RL policy ----------------------------------------------------
@@ -1149,7 +1197,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg,
                 rgb_nhwc = None
 
                 if onboard_recorder is not None:
-                    if isaac_env._camera is None:
+                    if getattr(isaac_env, "_camera", None) is None:
                         raise RuntimeError(
                             "Video recording was requested, but the "
                             "onboard camera was not created."
@@ -1509,7 +1557,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg,
                 )
 
             record_directory = Path(
-                "eval_logs/initial_episode_records"
+                "results/historical_evaluations/initial_episode_records"
             )
 
             record_directory.mkdir(
@@ -1537,7 +1585,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg,
                 "schema_version": 1,
                 "task": str(args_cli.task),
                 "seed": int(args_cli.seed),
-                "curriculum_level": float(
+                "curriculum_level": (lambda value: None if value is None else float(value))(
                     args_cli.curriculum_level
                 ),
                 "num_envs": int(args_cli.num_envs),
@@ -1729,6 +1777,217 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg,
             )
 
             print("=" * 72)
+
+            # --------------------------------------------------------------
+            # Exact-target stationary-hold diagnostics
+            # --------------------------------------------------------------
+            nominal_pos_noise = np.asarray(
+                getattr(
+                    env_cfg,
+                    "nominal_pos_noise",
+                    [float("nan")] * 3,
+                ),
+                dtype=np.float64,
+            )
+
+            exact_reset_requested = (
+                bool(getattr(env_cfg, "eval_mode", False))
+                and bool(getattr(env_cfg, "nominal_mode", False))
+                and np.allclose(nominal_pos_noise, 0.0)
+                and abs(
+                    float(
+                        getattr(
+                            env_cfg,
+                            "nominal_yaw_noise",
+                            float("nan"),
+                        )
+                    )
+                ) <= 1.0e-12
+                and abs(
+                    float(
+                        getattr(
+                            env_cfg,
+                            "nominal_vel_noise",
+                            float("nan"),
+                        )
+                    )
+                ) <= 1.0e-12
+                and abs(
+                    float(
+                        getattr(
+                            env_cfg,
+                            "nominal_ang_vel_noise",
+                            float("nan"),
+                        )
+                    )
+                ) <= 1.0e-12
+            )
+
+            if (
+                exact_reset_requested
+                and steps > 0
+                and full_state_size >= 18
+            ):
+                settle_steps = int(
+                    round(
+                        2.0
+                        * float(env_cfg.policy_rate_hz)
+                    )
+                )
+                settle_steps = min(
+                    settle_steps,
+                    max(steps - 1, 0),
+                )
+
+                state_post = full_states[
+                    :,
+                    settle_steps:steps,
+                    :,
+                ]
+                actions_post = actions_log[
+                    :,
+                    settle_steps:steps,
+                    :,
+                ]
+
+                distance_post = state_post[:, :, 17]
+
+                lin_speed_post = torch.linalg.vector_norm(
+                    state_post[:, :, 7:10],
+                    dim=-1,
+                )
+
+                ang_speed_post = torch.linalg.vector_norm(
+                    state_post[:, :, 10:13],
+                    dim=-1,
+                )
+
+                action_norm_post = torch.linalg.vector_norm(
+                    actions_post,
+                    dim=-1,
+                )
+
+                initial_z = initial_full_state[
+                    :,
+                    2,
+                ].to(
+                    device=device,
+                    dtype=full_states.dtype,
+                )
+
+                z_shift = (
+                    full_states[:, :steps, 2]
+                    - initial_z.unsqueeze(1)
+                )
+
+                rms_distance_per_env = torch.sqrt(
+                    torch.mean(
+                        distance_post.square(),
+                        dim=1,
+                    )
+                )
+
+                rms_speed_per_env = torch.sqrt(
+                    torch.mean(
+                        lin_speed_post.square(),
+                        dim=1,
+                    )
+                )
+
+                rms_body_rate_per_env = torch.sqrt(
+                    torch.mean(
+                        ang_speed_post.square(),
+                        dim=1,
+                    )
+                )
+
+                rms_action_norm_per_env = torch.sqrt(
+                    torch.mean(
+                        action_norm_post.square(),
+                        dim=1,
+                    )
+                )
+
+                final_distance = full_states[
+                    :,
+                    steps - 1,
+                    17,
+                ]
+
+                maximum_excursion = full_states[
+                    :,
+                    :steps,
+                    17,
+                ].amax(dim=1)
+
+                final_z_shift = z_shift[:, -1]
+                maximum_upward_excursion = z_shift.amax(dim=1)
+
+                fraction_within_010 = (
+                    distance_post <= 0.10
+                ).float().mean(dim=1)
+
+                fraction_within_015 = (
+                    distance_post <= 0.15
+                ).float().mean(dim=1)
+
+                fraction_within_025 = (
+                    distance_post <= 0.25
+                ).float().mean(dim=1)
+
+                print()
+                print("=" * 72)
+                print("EXACT-TARGET STATIONARY-HOLD DIAGNOSTICS")
+                print("=" * 72)
+                print(
+                    f"Settling period ignored:       "
+                    f"{settle_steps / float(env_cfg.policy_rate_hz):.2f} s"
+                )
+                print(
+                    f"Mean post-settle RMS distance: "
+                    f"{rms_distance_per_env.mean().item():.4f} m"
+                )
+                print(
+                    f"Mean final distance:           "
+                    f"{final_distance.mean().item():.4f} m"
+                )
+                print(
+                    f"Mean maximum excursion:        "
+                    f"{maximum_excursion.mean().item():.4f} m"
+                )
+                print(
+                    f"Mean post-settle RMS speed:    "
+                    f"{rms_speed_per_env.mean().item():.4f} m/s"
+                )
+                print(
+                    f"Mean post-settle RMS body rate:"
+                    f" {rms_body_rate_per_env.mean().item():.4f} rad/s"
+                )
+                print(
+                    f"Mean post-settle RMS action:   "
+                    f"{rms_action_norm_per_env.mean().item():.4f}"
+                )
+                print(
+                    f"Mean final vertical shift:     "
+                    f"{final_z_shift.mean().item():+.4f} m"
+                )
+                print(
+                    f"Mean maximum upward excursion: "
+                    f"{maximum_upward_excursion.mean().item():+.4f} m"
+                )
+                print(
+                    f"Mean fraction within 0.10 m:   "
+                    f"{100.0 * fraction_within_010.mean().item():.2f}%"
+                )
+                print(
+                    f"Mean fraction within 0.15 m:   "
+                    f"{100.0 * fraction_within_015.mean().item():.2f}%"
+                )
+                print(
+                    f"Mean fraction within 0.25 m:   "
+                    f"{100.0 * fraction_within_025.mean().item():.2f}%"
+                )
+                print("=" * 72)
 
             # ---- Plots (unchanged) -----------------------------------------
             if args_cli.follow_robot >= 0:
