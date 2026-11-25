@@ -1,0 +1,52 @@
+{
+  "implementation": "canonical_eager_controller",
+  "candidate_paths": [
+    "/home/sumukh/VisualQuadrotorLearning/results/runs/fresh_visual_student_20261124T211001Z/08_end_to_end_dagger/latest.pt",
+    "/home/sumukh/VisualQuadrotorLearning/results/runs/fresh_visual_student_20261124T211001Z/05_dagger_round2/finetuned_k8/policy.pt",
+    "/home/sumukh/VisualQuadrotorLearning/results/runs/fresh_visual_student_20261124T211001Z/08_end_to_end_dagger/latest_verified_policy.ts"
+  ],
+  "results": [
+    {
+      "stage": "independent_validation",
+      "policy": "candidate",
+      "seed": 39001,
+      "level": 1.0,
+      "expanded": false,
+      "duration_s": 59.980000000000004,
+      "num_envs": 128,
+      "survival_count": 128,
+      "survival": 1.0,
+      "hold_count": 128,
+      "hold": 1.0,
+      "mean_episode_length": 2999.0,
+      "settled_error_m": 0.023833850398659706,
+      "settled_lateral_error_m": 0.007791182957589626,
+      "settled_speed_mps": 0.0005035286885686219,
+      "post_10s_precision_fraction": 1.0,
+      "continuous_hold_after_10s": 1.0,
+      "post_10s_mean_peak_error_m": 0.02397129125893116,
+      "post_10s_worst_error_m": 0.03634733706712723
+    },
+    {
+      "stage": "independent_validation",
+      "policy": "candidate",
+      "seed": 39001,
+      "level": 1.0,
+      "expanded": true,
+      "duration_s": 59.980000000000004,
+      "num_envs": 128,
+      "survival_count": 128,
+      "survival": 1.0,
+      "hold_count": 128,
+      "hold": 1.0,
+      "mean_episode_length": 2999.0,
+      "settled_error_m": 0.023874249309301376,
+      "settled_lateral_error_m": 0.00781231839209795,
+      "settled_speed_mps": 0.0005003082333132625,
+      "post_10s_precision_fraction": 1.0,
+      "continuous_hold_after_10s": 1.0,
+      "post_10s_mean_peak_error_m": 0.024017328396439552,
+      "post_10s_worst_error_m": 0.037856899201869965
+    }
+  ]
+}

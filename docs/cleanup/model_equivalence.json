@@ -1,0 +1,21 @@
+{
+  "passed": true,
+  "absolute_tolerance": 1e-05,
+  "relative_tolerance": 1e-05,
+  "input_sets": [
+    "random",
+    "recorded"
+  ],
+  "maximum_absolute_errors": {
+    "estimator_random": 0.0,
+    "estimator_recorded": 0.0,
+    "base_random": 0.0,
+    "base_export_random": 0.0,
+    "base_recorded": 0.0,
+    "base_export_recorded": 0.0,
+    "final_random": 0.0,
+    "final_recorded": 0.0
+  },
+  "total_parameters": 555965,
+  "trainable_parameters": 108676
+}

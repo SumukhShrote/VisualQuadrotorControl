@@ -7,6 +7,7 @@ Demo environment with:
 - ArUco marker USD
 - Camera
 """
+from pathlib import Path as _RepositoryPath
 
 import argparse
 from isaaclab.app import AppLauncher
@@ -380,7 +381,7 @@ def main():
     cfg = DemoEnvCfg()
 
     out_dir = os.path.expanduser(
-        "~/AerialCatching/videos/demo"
+        str(_RepositoryPath(__file__).resolve().parents[0] / 'results/videos/demo')
     )
 
     os.makedirs(out_dir, exist_ok=True)

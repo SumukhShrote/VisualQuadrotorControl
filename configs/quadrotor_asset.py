@@ -69,7 +69,7 @@ QUADROTOR_CFG = ArticulationCfg(
 )
 
 """
-Quadrotor drone config for the AerialCatching ArUco hover task.
+Quadrotor drone config for the Visual Quadrotor Learning ArUco hover task.
 
 Hardware this will represent (fill in as you finalise the build):
   - Frame:        TODO (e.g. 250mm carbon fibre X-frame)

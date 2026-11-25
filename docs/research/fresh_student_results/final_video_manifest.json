@@ -1,0 +1,196 @@
+{
+  "end_to_end": {
+    "policy": "/home/sumukh/VisualQuadrotorLearning/results/runs/fresh_visual_student_20261124T211001Z/08_end_to_end_dagger/latest_verified_policy.ts",
+    "policy_sha256": "976949d07234b8e9ce45a03c43567932d08cf8decec7e9af902ac1e6994f4581",
+    "fps": 25.0,
+    "episodes": [
+      {
+        "domain": "original",
+        "level": 0.0,
+        "seed": 40001,
+        "steps": 499,
+        "frames": 250,
+        "terminated": false,
+        "full_horizon": true
+      },
+      {
+        "domain": "original",
+        "level": 0.25,
+        "seed": 40026,
+        "steps": 499,
+        "frames": 250,
+        "terminated": false,
+        "full_horizon": true
+      },
+      {
+        "domain": "original",
+        "level": 0.5,
+        "seed": 40051,
+        "steps": 499,
+        "frames": 250,
+        "terminated": false,
+        "full_horizon": true
+      },
+      {
+        "domain": "original",
+        "level": 0.75,
+        "seed": 40076,
+        "steps": 499,
+        "frames": 250,
+        "terminated": false,
+        "full_horizon": true
+      },
+      {
+        "domain": "original",
+        "level": 1.0,
+        "seed": 40101,
+        "steps": 499,
+        "frames": 250,
+        "terminated": false,
+        "full_horizon": true
+      },
+      {
+        "domain": "expanded",
+        "level": 0.0,
+        "seed": 40001,
+        "steps": 499,
+        "frames": 250,
+        "terminated": false,
+        "full_horizon": true
+      },
+      {
+        "domain": "expanded",
+        "level": 0.25,
+        "seed": 40026,
+        "steps": 499,
+        "frames": 250,
+        "terminated": false,
+        "full_horizon": true
+      },
+      {
+        "domain": "expanded",
+        "level": 0.5,
+        "seed": 40051,
+        "steps": 499,
+        "frames": 250,
+        "terminated": false,
+        "full_horizon": true
+      },
+      {
+        "domain": "expanded",
+        "level": 0.75,
+        "seed": 40076,
+        "steps": 499,
+        "frames": 250,
+        "terminated": false,
+        "full_horizon": true
+      },
+      {
+        "domain": "expanded",
+        "level": 1.0,
+        "seed": 40101,
+        "steps": 499,
+        "frames": 250,
+        "terminated": false,
+        "full_horizon": true
+      }
+    ]
+  },
+  "frozen": {
+    "policy": "/home/sumukh/VisualQuadrotorLearning/results/runs/fresh_visual_student_20261124T211001Z/06_pose_attention_dagger/best_policy.ts",
+    "policy_sha256": "b1c878d5c52aa72328c8c53c55b50716d515a5f598099fdad56bcae3b9b49ea2",
+    "fps": 25.0,
+    "episodes": [
+      {
+        "domain": "original",
+        "level": 0.0,
+        "seed": 40001,
+        "steps": 499,
+        "frames": 250,
+        "terminated": false,
+        "full_horizon": true
+      },
+      {
+        "domain": "original",
+        "level": 0.25,
+        "seed": 40026,
+        "steps": 499,
+        "frames": 250,
+        "terminated": false,
+        "full_horizon": true
+      },
+      {
+        "domain": "original",
+        "level": 0.5,
+        "seed": 40051,
+        "steps": 499,
+        "frames": 250,
+        "terminated": false,
+        "full_horizon": true
+      },
+      {
+        "domain": "original",
+        "level": 0.75,
+        "seed": 40076,
+        "steps": 499,
+        "frames": 250,
+        "terminated": false,
+        "full_horizon": true
+      },
+      {
+        "domain": "original",
+        "level": 1.0,
+        "seed": 40101,
+        "steps": 499,
+        "frames": 250,
+        "terminated": false,
+        "full_horizon": true
+      },
+      {
+        "domain": "expanded",
+        "level": 0.0,
+        "seed": 40001,
+        "steps": 499,
+        "frames": 250,
+        "terminated": false,
+        "full_horizon": true
+      },
+      {
+        "domain": "expanded",
+        "level": 0.25,
+        "seed": 40026,
+        "steps": 499,
+        "frames": 250,
+        "terminated": false,
+        "full_horizon": true
+      },
+      {
+        "domain": "expanded",
+        "level": 0.5,
+        "seed": 40051,
+        "steps": 499,
+        "frames": 250,
+        "terminated": false,
+        "full_horizon": true
+      },
+      {
+        "domain": "expanded",
+        "level": 0.75,
+        "seed": 40076,
+        "steps": 499,
+        "frames": 250,
+        "terminated": false,
+        "full_horizon": true
+      },
+      {
+        "domain": "expanded",
+        "level": 1.0,
+        "seed": 40101,
+        "steps": 499,
+        "frames": 250,
+        "terminated": false,
+        "full_horizon": true
+      }
+    ]
+  }
+}

@@ -1,8 +1,8 @@
 from setuptools import setup, find_packages
 setup(
-    name="aerial_catching",
+    name="visual_quadrotor_control",
     version="0.1.0",
-    description="Visual-Inertial ArUco hover — sim-to-real RL pipeline",
+    description="Visual representation learning and quadrotor control",
     packages=find_packages(),
     python_requires=">=3.11",
     install_requires=[

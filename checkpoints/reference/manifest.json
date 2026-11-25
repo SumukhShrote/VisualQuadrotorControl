@@ -1,0 +1,74 @@
+[
+  {
+    "canonical_path": "checkpoints/reference/teacher/teacher.pt",
+    "original_path": "logs/rsl_rl/CTBR_Hover_Teacher/2026-06-25_12-41-52/model_749.pt",
+    "sha256": "1e47ed23f54c83acfc060ef8daa69f00f28a9db29b5284cc99c5462899e56bd6",
+    "bytes": 152059
+  },
+  {
+    "canonical_path": "checkpoints/reference/teacher/agent.yaml",
+    "original_path": "logs/rsl_rl/CTBR_Hover_Teacher/2026-06-25_12-41-52/params/agent.yaml",
+    "sha256": "d8b9f04aed51724a61ab1c19556481d21f22503c9a4bf06befb0f87d9936c47c",
+    "bytes": 840
+  },
+  {
+    "canonical_path": "checkpoints/reference/visual_baseline/ppo_checkpoint.pt",
+    "original_path": "experiments/state_bottleneck/long_horizon_gae_20261123T032419Z/model_9.pt",
+    "sha256": "a4bb396745b6c4c88d625635f5631a4aabc5584dd376927df862939e5079066b",
+    "bytes": 4460943
+  },
+  {
+    "canonical_path": "checkpoints/reference/visual_baseline/policy.ts",
+    "original_path": "experiments/state_bottleneck/precision_ab_control_20261123T041432Z/policy_initial.ts",
+    "sha256": "839b3d6be662dffe0ba7de1b39ec2a835607e302766791cd5bbe63c79b93c5e5",
+    "bytes": 1617218
+  },
+  {
+    "canonical_path": "checkpoints/reference/representations/relative_pose.pt",
+    "original_path": "experiments/state_bottleneck/pose_attention_expanded_curriculum_20261124T034756Z/pose_best.pt",
+    "sha256": "f29f773bd67911e9820397c9de782943849a985beb6529ce5daf62cb7fca91a3",
+    "bytes": 327533
+  },
+  {
+    "canonical_path": "checkpoints/reference/pose_attention/checkpoint.pt",
+    "original_path": "experiments/state_bottleneck/pose_attention_dagger_resume_20261124T040606Z/best.pt",
+    "sha256": "e2459f128e444d97bb27e7f3bbe1e74a81d2d482cc36191874cf09d458881565",
+    "bytes": 764111
+  },
+  {
+    "canonical_path": "checkpoints/reference/pose_attention/policy.ts",
+    "original_path": "experiments/state_bottleneck/pose_attention_dagger_resume_20261124T040606Z/best_policy.ts",
+    "sha256": "e72867bd0354b364edc93291e361bac4feef4150784bc3c3af1910dd1deb60b9",
+    "bytes": 2417574
+  },
+  {
+    "canonical_path": "checkpoints/reference/representations/multiscale_masked_huber.pt",
+    "original_path": "experiments/state_bottleneck/multiscale_masked_huber_20261119T205457Z/multiscale_transformer_H32.pt",
+    "sha256": "97e86267948c7f1f9b32eba411cb76984fb88130f65f56bd63658c4b976a9ca4",
+    "bytes": 1147907
+  },
+  {
+    "canonical_path": "checkpoints/reference/visual_baseline/action_history_k8.pt",
+    "original_path": "experiments/state_bottleneck/action_history_study_20261120T200813Z/k8/policy.pt",
+    "sha256": "eac0e03816f2dff26228e49389f641e70c213feb10cb13bf2dc23ec03fbfd8d3",
+    "bytes": 1502417
+  },
+  {
+    "canonical_path": "checkpoints/reference/visual_baseline/dagger_round2.pt",
+    "original_path": "experiments/state_bottleneck/k8_onpolicy_dagger_round2_20261120T225553Z/finetuned_k8/policy.pt",
+    "sha256": "5be0d44bed8c53257a24ac53ecac187494a0e7c20afffb54366d687a0d42645b",
+    "bytes": 1502481
+  },
+  {
+    "canonical_path": "checkpoints/reference/representations/multiscale_plain_huber.pt",
+    "original_path": "experiments/state_bottleneck/multiscale_plain_huber_20261119T205226Z/multiscale_transformer_H32.pt",
+    "sha256": "17178b18fd609464773b8058d76dc701e8dfc5ff85a8caa7feae5393982b75f8",
+    "bytes": 1144835
+  },
+  {
+    "canonical_path": "checkpoints/reference/visual_baseline/pretrained_actor.pt",
+    "original_path": "experiments/state_bottleneck/action_transformer_suite_20261120T005220Z/pretrained/policy.pt",
+    "sha256": "356860cb7febb73643078a25677512e367aabf61adcdf5b97a75a10b74fd57bb",
+    "bytes": 1470411
+  }
+]

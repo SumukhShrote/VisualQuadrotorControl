@@ -1,0 +1,56 @@
+[
+  {
+    "source": "rl/collect_dagger.py",
+    "destination": null,
+    "sha256": "c11f29cb8b6f11f648a34ea9d1bd23c919833a19b067ab2cdf799abf62198e21",
+    "source_commit": "7417abe93c57b0b44b04dde8b609e94bd87ad36e"
+  },
+  {
+    "source": "rl/train_dagger.py",
+    "destination": null,
+    "sha256": "cdd3626120486ca76f88248bb6e940d11ee00627f5a19327d1edb2d52ba412db",
+    "source_commit": "7417abe93c57b0b44b04dde8b609e94bd87ad36e"
+  },
+  {
+    "source": "rl/train_rslrl_dagger_initialized_curriculum.py",
+    "destination": null,
+    "sha256": "f489f76a1ffc3bbb9e59022166a058322ea8850eef04bc8010cd89a59426634c",
+    "source_commit": "7417abe93c57b0b44b04dde8b609e94bd87ad36e"
+  },
+  {
+    "source": "rl/train_rslrl_dagger_initialized_large_scale_fixed.py",
+    "destination": null,
+    "sha256": "1e600a584e7c23d963eee90f8ce719ecd343eadd07e63133bcb04e91ff31487e",
+    "source_commit": "7417abe93c57b0b44b04dde8b609e94bd87ad36e"
+  },
+  {
+    "source": "rl/collect_dagger_corners256_v2.py",
+    "destination": "rl/collect_tcn_dagger.py",
+    "sha256": "28c11483a293bc8a7abc823ca9ae0670dd22d5f1f5f5288628160cf039881756",
+    "source_commit": "7417abe93c57b0b44b04dde8b609e94bd87ad36e"
+  },
+  {
+    "source": "rl/train_dagger_corners256_v2.py",
+    "destination": "rl/train_tcn_dagger.py",
+    "sha256": "a95c8ec7aac72005b8ae6db3ef5a0d962616b1e755f15c14e188dd063b6086b4",
+    "source_commit": "7417abe93c57b0b44b04dde8b609e94bd87ad36e"
+  },
+  {
+    "source": "rl/eval_rslrl.py",
+    "destination": "evaluation/eval_rslrl.py",
+    "sha256": "a6427c593b942559473bf376e4729687100879760271382953e739a3deedabef",
+    "source_commit": "7417abe93c57b0b44b04dde8b609e94bd87ad36e"
+  },
+  {
+    "source": "rl/eval_rslrl_rgb_ablation.py",
+    "destination": "evaluation/eval_rslrl_rgb_ablation.py",
+    "sha256": "78e12e3383795706186675eaf177f0c6a54e3c28dc203c2d922b5ad010b3746e",
+    "source_commit": "7417abe93c57b0b44b04dde8b609e94bd87ad36e"
+  },
+  {
+    "source": "rl/collect_tcn_probe_data.py",
+    "destination": "experiments/representation_learning/collect_tcn_probe_data.py",
+    "sha256": "8c9f760bf4054adf83b71c8c6c7590b6e25d21734012bff93ed2585e3fc60288",
+    "source_commit": "7417abe93c57b0b44b04dde8b609e94bd87ad36e"
+  }
+]

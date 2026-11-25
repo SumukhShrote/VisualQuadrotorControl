@@ -1,0 +1,180 @@
+{
+  "duplicate_matches": [
+    {
+      "historical_path": "/home/sumukh/VisualQuadrotorLearning_archive/logs/r2dreamer/mask_corners_ablation_mask_nested600k_seed42_v1/step_00450133.pt",
+      "existing_dreamer_path": "/home/sumukh/QuadcopterDreamer/logs/r2dreamer/mask_corners_ablation_mask_nested600k_seed42_v1/step_00450133.pt",
+      "sha256": "953bc865720e9866f18cbf5fbe18b718539b6d6a422105f3fe7411b7e05c675e",
+      "bytes": 138961491
+    },
+    {
+      "historical_path": "/home/sumukh/VisualQuadrotorLearning_archive/logs/r2dreamer/mask_corners_ablation_mask_nested600k_seed42_v1/step_00575075.pt",
+      "existing_dreamer_path": "/home/sumukh/QuadcopterDreamer/logs/r2dreamer/mask_corners_ablation_mask_nested600k_seed42_v1/step_00575075.pt",
+      "sha256": "3afa43e63596af1732799d4f9aaa95b52e3a14851ed79eab626d69159616502c",
+      "bytes": 138961683
+    },
+    {
+      "historical_path": "/home/sumukh/VisualQuadrotorLearning_archive/logs/r2dreamer/mask_corners_ablation_corners8_nested600k_seed42_v1/step_00550030.pt",
+      "existing_dreamer_path": "/home/sumukh/QuadcopterDreamer/logs/r2dreamer/mask_corners_ablation_corners8_nested600k_seed42_v1/step_00550030.pt",
+      "sha256": "725a1976a61c03697b06374b3d038a461a391a5fe3df674573bc29f5dbb56534",
+      "bytes": 120310531
+    },
+    {
+      "historical_path": "/home/sumukh/VisualQuadrotorLearning_archive/logs/r2dreamer/mask_corners_ablation_corners8_nested600k_seed42_v1/step_00575521.pt",
+      "existing_dreamer_path": "/home/sumukh/QuadcopterDreamer/logs/r2dreamer/mask_corners_ablation_corners8_nested600k_seed42_v1/step_00575521.pt",
+      "sha256": "79f67b5727b1a6e90bc188682126b476b60bae02cd41e8dff24f4071c1aea3f0",
+      "bytes": 120310531
+    }
+  ],
+  "groups": {
+    "privileged_ratio256_position_velocity_sigma08_50k_runD_v1": {
+      "duplicate_count": 0,
+      "duplicate_bytes": 0,
+      "unique_count": 10,
+      "unique_bytes": 1389604979
+    },
+    "privileged_ratio256_position_only_10k_runBprime_smoke_v1": {
+      "duplicate_count": 0,
+      "duplicate_bytes": 0,
+      "unique_count": 4,
+      "unique_bytes": 555835905
+    },
+    "mask_corners_ablation_mask_nested600k_seed42_v1": {
+      "duplicate_count": 2,
+      "duplicate_bytes": 277923174,
+      "unique_count": 22,
+      "unique_bytes": 3057143255
+    },
+    "mask_corners_ablation_corners8_nested600k_seed42_v1": {
+      "duplicate_count": 2,
+      "duplicate_bytes": 240621062,
+      "unique_count": 22,
+      "unique_bytes": 2646818509
+    },
+    "privileged_ratio256_position_velocity_bounded_50k_runE_v1": {
+      "duplicate_count": 0,
+      "duplicate_bytes": 0,
+      "unique_count": 20,
+      "unique_bytes": 2779219761
+    },
+    "mask_corners_ablation_mask_contract_smoke_v1": {
+      "duplicate_count": 0,
+      "duplicate_bytes": 0,
+      "unique_count": 1,
+      "unique_bytes": 48609254
+    },
+    "corners8_reconfix_smoke50k_seed42_v1": {
+      "duplicate_count": 0,
+      "duplicate_bytes": 0,
+      "unique_count": 1,
+      "unique_bytes": 120301198
+    },
+    "throughput_benchmarks_runE": {
+      "duplicate_count": 0,
+      "duplicate_bytes": 0,
+      "unique_count": 3,
+      "unique_bytes": 416854680
+    },
+    "privileged_ratio256_5k_v1": {
+      "duplicate_count": 0,
+      "duplicate_bytes": 0,
+      "unique_count": 10,
+      "unique_bytes": 1028225587
+    },
+    "nominal_centered_dreamer_25k_20260726_131217": {
+      "duplicate_count": 0,
+      "duplicate_bytes": 0,
+      "unique_count": 10,
+      "unique_bytes": 1294408270
+    },
+    "mask_corners_ablation_corners8_contract_smoke_v1": {
+      "duplicate_count": 0,
+      "duplicate_bytes": 0,
+      "unique_count": 1,
+      "unique_bytes": 42391793
+    },
+    "privileged_ratio256_position_velocity_bounded_5k_runE_smoke_v1": {
+      "duplicate_count": 0,
+      "duplicate_bytes": 0,
+      "unique_count": 2,
+      "unique_bytes": 277912923
+    },
+    "mask_corners_ablation_mask_h50_nested600k_seed42_v1": {
+      "duplicate_count": 0,
+      "duplicate_bytes": 0,
+      "unique_count": 1,
+      "unique_bytes": 138951752
+    },
+    "mask_corners_ablation_corners8_reconfix_h50_nested600k_seed42_v1": {
+      "duplicate_count": 0,
+      "duplicate_bytes": 0,
+      "unique_count": 1,
+      "unique_bytes": 120301390
+    },
+    "privileged_ratio256_position_only_contw25_10k_runC_smoke_v1": {
+      "duplicate_count": 0,
+      "duplicate_bytes": 0,
+      "unique_count": 4,
+      "unique_bytes": 555835905
+    },
+    "nominal_centered_dreamer_5k_20260726_100910": {
+      "duplicate_count": 0,
+      "duplicate_bytes": 0,
+      "unique_count": 2,
+      "unique_bytes": 258873846
+    },
+    "nominal_centered_dreamer_100k_20260726_152424": {
+      "duplicate_count": 0,
+      "duplicate_bytes": 0,
+      "unique_count": 37,
+      "unique_bytes": 4789346583
+    },
+    "privileged_ratio256_100k_runA_v1": {
+      "duplicate_count": 0,
+      "duplicate_bytes": 0,
+      "unique_count": 20,
+      "unique_bytes": 2779219889
+    },
+    "privileged_ratio128_position_velocity_bounded_500k_runF_v1": {
+      "duplicate_count": 0,
+      "duplicate_bytes": 0,
+      "unique_count": 50,
+      "unique_bytes": 6948064619
+    },
+    "privileged_ratio256_vertical_reward_100k_runB_v1": {
+      "duplicate_count": 0,
+      "duplicate_bytes": 0,
+      "unique_count": 1,
+      "unique_bytes": 138961491
+    },
+    "privileged_ratio128_position_velocity_nested_precision_600k_runH_v1": {
+      "duplicate_count": 0,
+      "duplicate_bytes": 0,
+      "unique_count": 24,
+      "unique_bytes": 3335066429
+    },
+    "privileged_ratio32_30k_v1": {
+      "duplicate_count": 0,
+      "duplicate_bytes": 0,
+      "unique_count": 6,
+      "unique_bytes": 833758759
+    },
+    "mask_corners_ablation_corners8_reconfix_nested600k_seed42_v1": {
+      "duplicate_count": 0,
+      "duplicate_bytes": 0,
+      "unique_count": 1,
+      "unique_bytes": 120301390
+    },
+    "privileged_decoder_calibration_60k_v1": {
+      "duplicate_count": 0,
+      "duplicate_bytes": 0,
+      "unique_count": 12,
+      "unique_bytes": 1486837113
+    },
+    "privileged_ratio128_position_velocity_bounded_600k_runG_v1": {
+      "duplicate_count": 0,
+      "duplicate_bytes": 0,
+      "unique_count": 24,
+      "unique_bytes": 3335066429
+    }
+  }
+}

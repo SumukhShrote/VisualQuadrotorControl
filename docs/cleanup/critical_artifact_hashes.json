@@ -1,0 +1,52 @@
+[
+  {
+    "path": "logs/rsl_rl/CTBR_Hover_Teacher/2026-06-25_12-41-52/model_749.pt",
+    "sha256": "1e47ed23f54c83acfc060ef8daa69f00f28a9db29b5284cc99c5462899e56bd6",
+    "bytes": 152059
+  },
+  {
+    "path": "experiments/state_bottleneck/long_horizon_gae_20261123T032419Z/model_9.pt",
+    "sha256": "a4bb396745b6c4c88d625635f5631a4aabc5584dd376927df862939e5079066b",
+    "bytes": 4460943
+  },
+  {
+    "path": "experiments/state_bottleneck/precision_ab_control_20261123T041432Z/policy_initial.ts",
+    "sha256": "839b3d6be662dffe0ba7de1b39ec2a835607e302766791cd5bbe63c79b93c5e5",
+    "bytes": 1617218
+  },
+  {
+    "path": "experiments/state_bottleneck/pose_attention_expanded_curriculum_20261124T034756Z/pose_best.pt",
+    "sha256": "f29f773bd67911e9820397c9de782943849a985beb6529ce5daf62cb7fca91a3",
+    "bytes": 327533
+  },
+  {
+    "path": "experiments/state_bottleneck/pose_attention_dagger_resume_20261124T040606Z/best.pt",
+    "sha256": "e2459f128e444d97bb27e7f3bbe1e74a81d2d482cc36191874cf09d458881565",
+    "bytes": 764111
+  },
+  {
+    "path": "experiments/state_bottleneck/pose_attention_dagger_resume_20261124T040606Z/best_policy.ts",
+    "sha256": "e72867bd0354b364edc93291e361bac4feef4150784bc3c3af1910dd1deb60b9",
+    "bytes": 2417574
+  },
+  {
+    "path": "experiments/state_bottleneck/launch_action_history_study.py",
+    "sha256": "10c4669899c29a97268689f596bf7dc9db9ff35e02698435dd7c97741733f83c",
+    "bytes": 29956
+  },
+  {
+    "path": "experiments/state_bottleneck/supervised_multiscale_transformer.py",
+    "sha256": "34230a4ca9dd0b3ba1ac8c40aac5312a8b63b7172032e1480392d1c6f3a15f45",
+    "bytes": 22082
+  },
+  {
+    "path": "train_pose_attention_resume_dagger.py",
+    "sha256": "e0357e2773751ed35bf6409d6f5d1548341d5a1f1086f50122c5194bc9c8f48d",
+    "bytes": 38409
+  },
+  {
+    "path": "validate_pose_attention_controller.py",
+    "sha256": "39221c7ba9407e59d1438009cd2d9a251fa305c74a355f5fad54fcbd41742ff4",
+    "bytes": 34828
+  }
+]

@@ -1,0 +1,14 @@
+[
+  {
+    "path": "datasets/state_estimation/pooled_student_epoch70_all_levels.pt",
+    "release_filename": "pooled_student_epoch70_all_levels.pt",
+    "bytes": 121408423,
+    "sha256": "5603a2d54201a564b2fb08cf838831abe2a75e2033d5fe570cee0a56c31e5c3a"
+  },
+  {
+    "path": "results/diagnostics/frozen_representation/seed_9513_distill/frozen_features.npz",
+    "release_filename": "frozen_features.npz",
+    "bytes": 24698476,
+    "sha256": "4e62d327f92de7b6344dca06404ae3461abe3ea09a8da311079a596f13853a29"
+  }
+]

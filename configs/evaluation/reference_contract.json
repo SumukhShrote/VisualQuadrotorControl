@@ -1,0 +1,57 @@
+{
+  "name": "frozen_pose_attention_visual_controller",
+  "selected_dagger_round": 15,
+  "environment": "Isaac-QuadrotorHoverStudentDistill-v0",
+  "control_frequency_hz": 50,
+  "observation": {
+    "corner_history_shape": [
+      32,
+      8
+    ],
+    "corner_history_dim": 256,
+    "action_history_shape": [
+      8,
+      4
+    ],
+    "action_history_dim": 32
+  },
+  "representation": {
+    "geometry_features": 64,
+    "linear_velocity_features": 64,
+    "angular_velocity_features": 64,
+    "relative_pose_features": 64,
+    "explicit_pose_predictions": 5,
+    "action_history": 32,
+    "policy_head_input_dim": 293
+  },
+  "action": {
+    "type": "CTBR",
+    "dimension": 4
+  },
+  "final_training": {
+    "method": "DAgger",
+    "perception_frozen": true,
+    "policy_head_trainable": true,
+    "parallel_environments": 512,
+    "collected_transitions": 1474560
+  },
+  "evaluation": {
+    "position_threshold_m": 0.1,
+    "speed_threshold_mps": 0.2,
+    "independent_10s": {
+      "successful": 1024,
+      "total": 1024
+    },
+    "independent_60s": {
+      "successful": 256,
+      "total": 256,
+      "continuous_hold_start_s": 10
+    }
+  },
+  "limitations": [
+    "Analytically projected marker corners",
+    "No completed real-camera robustness benchmark",
+    "No demonstrated dynamics transfer",
+    "Combined intervention has not been fully ablated"
+  ]
+}

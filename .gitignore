@@ -50,15 +50,38 @@ AerialCatching_dagger_precleanup.tar.gz
 .DS_Store
 Thumbs.db
 
-# Dreamer generated artifacts
-r2dreamer/__pycache__/
-r2dreamer/**/__pycache__/
-r2dreamer/**/*.pyc
-r2dreamer/**/*.pt
-r2dreamer/**/*.mp4
-r2dreamer/**/*.log
-r2dreamer/replay/
-r2dreamer/wandb/
-logs/r2dreamer/
+# Generated research artifacts
+*.pt
+*.pth
+*.ckpt
+*.ts
+*.npz
+*.npy
+*.safetensors
+*.mp4
+*.avi
+*.process_status
+events.out.tfevents.*
+.cache/
+/datasets/
+/results/runs/
+/results/historical_experiments/
+/results/historical_evaluations/
+/results/videos/
+!/checkpoints/
+/checkpoints/*
+!/checkpoints/reference/
+/checkpoints/reference/*
+!/checkpoints/reference/manifest.json
 
-# Keep Dreamer environment configs tracked
+# Explicit maintained research source
+!/experiments/
+!/experiments/**/
+!/experiments/**/*.py
+!/experiments/**/*.md
+
+/experiments/records/
+/results/
+*.bak
+*.tmp
+*.dedup_tmp

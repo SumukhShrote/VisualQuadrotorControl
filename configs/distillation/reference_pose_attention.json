@@ -1,0 +1,30 @@
+{
+  "environment": "Isaac-QuadrotorHoverStudentDistill-v0",
+  "parallel_environments": 512,
+  "rollout_steps": 192,
+  "planned_rounds": 24,
+  "selected_round": 15,
+  "updates_per_round": 180,
+  "replay_capacity": 180000,
+  "feature_dimension": 293,
+  "batch_size": 2048,
+  "optimizer": "AdamW",
+  "learning_rate": 0.0001,
+  "weight_decay": 1e-06,
+  "gradient_clip": 1.0,
+  "teacher_mixing": {
+    "unit": "episode",
+    "rounds_1_and_2": 1.0,
+    "subsequent_schedule": "max(0.05, 0.4 * 0.8 ** (round - 3))"
+  },
+  "sample_weight": {
+    "position_error_below_0.25_m": 3.0,
+    "otherwise": 1.0
+  },
+  "curriculum": {
+    "original_domain_every_fourth_round": true,
+    "expanded_level": "min(1.0, 0.25 + 0.25 * ((round - 1) // 3))"
+  },
+  "perception_frozen": true,
+  "collected_transitions_at_round_15": 1474560
+}

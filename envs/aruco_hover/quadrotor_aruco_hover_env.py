@@ -133,7 +133,7 @@ class ArucoHoverEnvCfg(DirectRLEnvCfg):
 
     # ---------- Episode / timing --------------------------------------------
     episode_length_s: float = 10.0
-
+    hover_centered_thrust: bool = False
     sim_rate_hz: int = 500          # PhysX step rate
     policy_rate_hz: int = 50        # Policy query rate (10x decimation)
     pd_loop_rate_hz: int = 250      # Inner CTBR attitude-rate PD loop
@@ -234,6 +234,16 @@ class ArucoHoverEnvCfg(DirectRLEnvCfg):
     # A value in [0, 1] freezes the reset distribution at that
     # curriculum difficulty, which is useful for DAgger collection.
     forced_curriculum_level: float = -1.0
+    precision_start_fraction: float = 0.0
+    precision_start_scale: float = 0.25
+
+    # Explicit fixed nominal environment for Dreamer debugging.
+    nominal_mode: bool = False
+
+    nominal_pos_noise: list = [0.05, 0.05, 0.05]
+    nominal_yaw_noise: float = 0.03
+    nominal_vel_noise: float = 0.01
+    nominal_ang_vel_noise: float = 0.01
     init_vel_noise: float = 0.1
     init_ang_vel_noise: float = 0.1
     # init_pos_noise_start: list = [0.0, 0.0, 0.0]
@@ -281,6 +291,27 @@ class ArucoHoverEnvCfg(DirectRLEnvCfg):
     w_orientation: float = 1.0       # facing-error (1 - cos theta) weight
     alignment_power: int = 2         # exponent for the gating term
     w_action_rate: float = 0.10      # action-delta (jerk) penalty weight
+    w_stable_hover: float = 0.50
+    w_termination: float = 1.00
+
+    # Isolated tight-hover reward experiment.
+    # False preserves the historical reward exactly.
+    tight_hover_reward_v1: bool = False
+    continuing_hover_reward_v1: bool = False
+    w_continuing_hover: float = 12.0
+    w_center_hover: float = 2.0
+    continuing_pos_width: float = 0.025
+    continuing_speed_width: float = 0.05
+    continuing_center_pos_sigma: float = 0.05
+    continuing_center_speed_sigma: float = 0.08
+    w_tight_hover: float = 3.0
+    tight_pos_sigma: float = 0.15
+    tight_lin_speed_sigma: float = 0.10
+
+    stable_pos_error: float = 0.25
+    stable_lin_speed: float = 0.25
+    stable_ang_speed: float = 0.50
+    stable_alignment: float = 0.95
 
     # ---------- Termination thresholds ----------
     max_pos_error: float = 4.0      # [m] from hover point
@@ -443,7 +474,7 @@ class ArucoHoverTeacherEnv(DirectRLEnv):
         self._episode_sums = {
             k: torch.zeros(self.num_envs, device=self.device)
             for k in ["alive", "proximity", "lin_vel", "ang_vel",
-                      "orientation", "action_rate"]
+                      "orientation", "action_rate", "tight_hover", "stable_hover", "termination"]
         }
 
         # ---------- Robot body index ----------
@@ -650,6 +681,39 @@ class ArucoHoverTeacherEnv(DirectRLEnv):
             UsdShade.MaterialBindingAPI(wall_prim).Bind(material)
             print(f"[INFO] ArUco texture applied: {texture_path}")
     
+    def _restore_nominal_visuals(self, env_ids: torch.Tensor | None):
+        """Restore deterministic lighting and ArUco appearance."""
+        try:
+            import omni.usd
+            from pxr import UsdLux, UsdShade, Sdf, Gf
+        except ImportError:
+            return
+
+        stage = omni.usd.get_context().get_stage()
+
+        # Fixed global dome light.
+        light_prim = stage.GetPrimAtPath("/World/Light")
+        if light_prim.IsValid():
+            light = UsdLux.DomeLight(light_prim)
+            light.GetIntensityAttr().Set(2000.0)
+            light.GetColorAttr().Set(Gf.Vec3f(1.0, 1.0, 1.0))
+
+        # Remove randomized ArUco tint.
+        shader_prim = stage.GetPrimAtPath(
+            "/World/Looks/ArucoMarkerMat/Shader"
+        )
+        if shader_prim.IsValid():
+            shader = UsdShade.Shader(shader_prim)
+            tint_input = shader.GetInput("diffuse_tint")
+
+            if not tint_input:
+                tint_input = shader.CreateInput(
+                    "diffuse_tint",
+                    Sdf.ValueTypeNames.Color3f,
+                )
+
+            tint_input.Set(Gf.Vec3f(1.0, 1.0, 1.0))
+            
     def _randomise_visuals(self, env_ids: torch.Tensor):
         """
         Per-reset visual DR for student policy robustness:
@@ -847,12 +911,16 @@ class ArucoHoverTeacherEnv(DirectRLEnv):
         )
 
         # 4. Lighting
-        light_intensity = float(np.random.uniform(500, 5000))
-        light_color = (
-            float(np.random.uniform(0.85, 1.0)),
-            float(np.random.uniform(0.85, 1.0)),
-            float(np.random.uniform(0.85, 1.0)),
-        )
+        if self.cfg.nominal_mode:
+            light_intensity = 2000.0
+            light_color = (1.0, 1.0, 1.0)
+        else:
+            light_intensity = float(np.random.uniform(500, 5000))
+            light_color = (
+                float(np.random.uniform(0.85, 1.0)),
+                float(np.random.uniform(0.85, 1.0)),
+                float(np.random.uniform(0.85, 1.0)),
+            )
         light_cfg = sim_utils.DomeLightCfg(
             intensity=light_intensity,
             color=light_color,
@@ -860,7 +928,10 @@ class ArucoHoverTeacherEnv(DirectRLEnv):
         light_cfg.func("/World/Light", light_cfg)
 
         # Optional: self._apply_aruco_texture()
-        self._wall_material_pool = self._build_material_pool()
+        if self.cfg.nominal_mode:
+            self._wall_material_pool = []
+        else:
+            self._wall_material_pool = self._build_material_pool()
 
     # ---------- CONTROL HELPERS ----------
 
@@ -925,12 +996,29 @@ class ArucoHoverTeacherEnv(DirectRLEnv):
         self._actions = actions.clone().clamp(-1.0, 1.0)
 
         # Collective thrust: map [-1, 1] -> [0, m*g*T2W]
-        robot_weight = self._robot_mass * self._gravity_magnitude  # (N,)
-        max_thrust   = robot_weight * self._thrust_to_weight        # (N,)
-        self._wrench_des[:, 0] = (
-            (self._actions[:, 0] + 1.0) / 2.0
-        ) * max_thrust
+        robot_weight = self._robot_mass * self._gravity_magnitude
+        max_thrust = robot_weight * self._thrust_to_weight
 
+        thrust_action = self._actions[:, 0]
+
+        if self.cfg.hover_centered_thrust:
+            # Maps:
+            #   action=-1 -> zero thrust
+            #   action= 0 -> exact hover thrust
+            #   action=+1 -> maximum thrust
+            hover_fraction = 1.0 / self._thrust_to_weight
+
+            thrust_fraction = torch.where(
+                thrust_action >= 0.0,
+                hover_fraction
+                + thrust_action * (1.0 - hover_fraction),
+                hover_fraction * (1.0 + thrust_action),
+            )
+        else:
+            # Legacy mapping.
+            thrust_fraction = (thrust_action + 1.0) / 2.0
+
+        self._wrench_des[:, 0] = thrust_fraction * max_thrust
         # Attitude moments from CTBR PD
         self._wrench_des[:, 1:] = self._get_moment_from_ctbr(self._actions)
 
@@ -1035,7 +1123,8 @@ class ArucoHoverTeacherEnv(DirectRLEnv):
         window of resets, demotes (partially) if performance regresses hard.
         """
         if (
-            not self.cfg.curriculum_enabled
+            self.cfg.nominal_mode
+            or not self.cfg.curriculum_enabled
             or self.cfg.forced_curriculum_level >= 0.0
         ):
             return
@@ -1208,6 +1297,129 @@ class ArucoHoverTeacherEnv(DirectRLEnv):
             action_delta, dim=-1
         )
 
+        # --------------Optional tight-hover shaping------------------------------
+        #
+        # The broad proximity reward handles recovery.
+        #
+        # This term only becomes large when BOTH:
+        #   1. position error is small
+        #   2. linear speed is small
+        #
+        # Therefore flying rapidly through the target is not equivalent to
+        # actually settling at the target.
+        r_tight_hover = torch.zeros_like(r_alive)
+        r_stable_hover = torch.zeros_like(r_alive)
+
+        if self.cfg.tight_hover_reward_v1:
+            lin_speed = torch.linalg.norm(
+                lin_vel_b,
+                dim=-1,
+            )
+            ang_speed = torch.linalg.norm(
+                av_b,
+                dim=-1,
+            )
+            pos_dist = torch.sqrt(
+                dist_sq.clamp_min(0.0)
+            )
+
+            tight_pos_sigma_sq = (
+                self.cfg.tight_pos_sigma ** 2
+            )
+            tight_vel_sigma_sq = (
+                self.cfg.tight_lin_speed_sigma ** 2
+            )
+
+            r_tight_hover = (
+                self.cfg.w_tight_hover
+                * alignment_score
+                * torch.exp(
+                    -dist_sq
+                    / (2.0 * tight_pos_sigma_sq)
+                    -lin_speed.square()
+                    / (2.0 * tight_vel_sigma_sq)
+                )
+            )
+
+            stable_mask = (
+                (pos_dist <= self.cfg.stable_pos_error)
+                & (
+                    lin_speed
+                    <= self.cfg.stable_lin_speed
+                )
+                & (
+                    ang_speed
+                    <= self.cfg.stable_ang_speed
+                )
+                & (
+                    alignment_score
+                    >= self.cfg.stable_alignment
+                )
+            )
+
+            r_stable_hover = (
+                self.cfg.w_stable_hover
+                * stable_mask.to(torch.float32)
+            )
+
+
+        # Continuing hover: no finite-duration completion bonus.
+        # The maximum reward occurs near zero position error
+        # and zero linear velocity, on every timestep.
+        if self.cfg.continuing_hover_reward_v1:
+            if self.cfg.tight_hover_reward_v1:
+                raise RuntimeError(
+                    "Enable either continuing_hover_reward_v1 "
+                    "or tight_hover_reward_v1, not both."
+                )
+
+            pos_dist = torch.sqrt(
+                dist_sq.clamp_min(0.0)
+            )
+
+            lin_speed = torch.linalg.norm(
+                lin_vel_b,
+                dim=-1,
+            )
+
+            pos_score = torch.sigmoid(
+                (
+                    self.cfg.stable_pos_error
+                    - pos_dist
+                )
+                / self.cfg.continuing_pos_width
+            )
+
+            speed_score = torch.sigmoid(
+                (
+                    self.cfg.stable_lin_speed
+                    - lin_speed
+                )
+                / self.cfg.continuing_speed_width
+            )
+
+            center_score = torch.exp(
+                -0.5 * (
+                    pos_dist
+                    / self.cfg.continuing_center_pos_sigma
+                ).square()
+                -0.5 * (
+                    lin_speed
+                    / self.cfg.continuing_center_speed_sigma
+                ).square()
+            )
+
+            r_tight_hover = (
+                self.cfg.w_continuing_hover
+                * pos_score
+                * speed_score
+                + self.cfg.w_center_hover
+                * center_score
+            )
+
+            # No discontinuous, thresholded stable bonus.
+            r_stable_hover = torch.zeros_like(r_alive)
+
         # --------------Aggregate---------------------------------------------------
         dt = self.step_dt if self.cfg.scale_reward_with_time else 1.0
 
@@ -1218,6 +1430,8 @@ class ArucoHoverTeacherEnv(DirectRLEnv):
             "ang_vel":     -p_ang_vel      * dt,
             "orientation":  r_orientation  * dt,   # NOTE: now positive, sign flipped from before
             "action_rate": -p_action_rate  * dt,
+            "tight_hover":  r_tight_hover  * dt,
+            "stable_hover": r_stable_hover * dt,
         }
 
         for k, v in rewards.items():
@@ -1272,6 +1486,29 @@ class ArucoHoverTeacherEnv(DirectRLEnv):
         }
 
         return died, timeout
+    
+    def _restore_nominal_parameters(self, env_ids: torch.Tensor):
+        """Restore fixed nominal plant and controller parameters."""
+        n = len(env_ids)
+
+        self._robot_mass[env_ids] = self.cfg.mass
+        self._thrust_to_weight[env_ids] = self.cfg.thrust_to_weight
+        self._k_eta[env_ids] = self.cfg.k_eta
+        self._tau_m[env_ids] = self.cfg.tau_m
+        self._kp_omega[env_ids] = self.cfg.kp_omega
+        self._kd_omega[env_ids] = self.cfg.kd_omega
+
+        nominal_inertia = torch.diag(
+            torch.tensor(
+                [self.cfg.Ixx, self.cfg.Iyy, self.cfg.Izz],
+                device=self.device,
+                dtype=torch.float32,
+            )
+        ).unsqueeze(0).expand(n, -1, -1)
+
+        self.inertia_tensor[env_ids] = nominal_inertia
+
+        self._rebuild_motor_allocation(env_ids)
 
     def _domain_randomise(self, env_ids: torch.Tensor):
         """
@@ -1373,7 +1610,9 @@ class ArucoHoverTeacherEnv(DirectRLEnv):
         extras["Episode_Termination/timeout"] = (
             self.reset_time_outs[env_ids].sum().item()
         )
-        if self.cfg.forced_curriculum_level >= 0.0:
+        if self.cfg.nominal_mode:
+            active_curriculum_level = 0.0
+        elif self.cfg.forced_curriculum_level >= 0.0:
             active_curriculum_level = float(
                 self.cfg.forced_curriculum_level
             )
@@ -1427,11 +1666,55 @@ class ArucoHoverTeacherEnv(DirectRLEnv):
         n = len(env_ids)
         default_root = self._robot.data.default_root_state[env_ids].clone()
 
+        precision_fraction = float(
+            getattr(self.cfg, "precision_start_fraction", 0.0)
+        )
+        precision_scale = float(
+            getattr(self.cfg, "precision_start_scale", 0.25)
+        )
+
+        if not 0.0 <= precision_fraction <= 1.0:
+            raise ValueError("Invalid precision_start_fraction")
+
+        if not 0.0 < precision_scale <= 1.0:
+            raise ValueError("Invalid precision_start_scale")
+
+        if precision_fraction > 0.0 and not self.cfg.nominal_mode:
+            precision_mask = (
+                torch.rand(n, device=self.device)
+                < precision_fraction
+            )
+        else:
+            precision_mask = None
+
         # Position = hover point + uniform noise
-        curriculum_pos_noise, curriculum_yaw_noise = self._get_curriculum_noise()
+        if self.cfg.nominal_mode:
+            position_noise = torch.tensor(
+                self.cfg.nominal_pos_noise,
+                device=self.device,
+                dtype=torch.float32,
+            )
+            yaw_noise_limit = float(self.cfg.nominal_yaw_noise)
+            velocity_noise_limit = float(self.cfg.nominal_vel_noise)
+            angular_velocity_noise_limit = float(
+                self.cfg.nominal_ang_vel_noise
+            )
+        else:
+            position_noise, yaw_noise_limit = self._get_curriculum_noise()
+            velocity_noise_limit = float(self.cfg.init_vel_noise)
+            angular_velocity_noise_limit = float(
+                self.cfg.init_ang_vel_noise
+            )
         pos_noise = (
             torch.rand(n, 3, device=self.device) * 2.0 - 1.0
-        ) * curriculum_pos_noise
+        ) * position_noise
+
+        if precision_mask is not None:
+            pos_noise = torch.where(
+                precision_mask[:, None],
+                pos_noise * precision_scale,
+                pos_noise,
+            )
 
         default_root[:, 0:3] = self._hover_point_w[env_ids] + pos_noise
 
@@ -1439,7 +1722,14 @@ class ArucoHoverTeacherEnv(DirectRLEnv):
         base_yaw  = torch.full((n,), 0.0, device=self.device)
         yaw_noise = (
             torch.rand(n, device=self.device) * 2.0 - 1.0
-        ) * curriculum_yaw_noise
+        ) * yaw_noise_limit
+        if precision_mask is not None:
+            yaw_noise = torch.where(
+                precision_mask,
+                yaw_noise * precision_scale,
+                yaw_noise,
+            )
+
         yaw_total = base_yaw + yaw_noise
         # wxyz pure-yaw quaternion: w=cos(y/2), x=0, y=0, z=sin(y/2)
         default_root[:, 3] = torch.cos(yaw_total / 2.0)
@@ -1450,13 +1740,27 @@ class ArucoHoverTeacherEnv(DirectRLEnv):
         # Linear velocity noise
         vel_noise = (
             torch.rand(n, 3, device=self.device) * 2.0 - 1.0
-        ) * torch.tensor(self.cfg.init_vel_noise, device=self.device)
+        ) * velocity_noise_limit
+        if precision_mask is not None:
+            vel_noise = torch.where(
+                precision_mask[:, None],
+                vel_noise * precision_scale,
+                vel_noise,
+            )
+
         default_root[:, 7:10] = vel_noise
 
         # Angular velocity noise
         ang_noise = (
             torch.rand(n, 3, device=self.device) * 2.0 - 1.0
-        ) * torch.tensor(self.cfg.init_ang_vel_noise, device=self.device)
+        ) * angular_velocity_noise_limit
+        if precision_mask is not None:
+            ang_noise = torch.where(
+                precision_mask[:, None],
+                ang_noise * precision_scale,
+                ang_noise,
+            )
+
         default_root[:, 10:13] = ang_noise
 
         self._robot.write_root_pose_to_sim(
@@ -1466,6 +1770,8 @@ class ArucoHoverTeacherEnv(DirectRLEnv):
             default_root[:, 7:], env_ids=env_ids
         )
 
+        if self.cfg.nominal_mode:
+            self._restore_nominal_parameters(env_ids)
         # --------------4. Motor initialisation near hover equilibrium--------------------------
         robot_weight   = self._robot_mass[env_ids] * self._gravity_magnitude
         per_motor_force = robot_weight / 4.0
@@ -1479,11 +1785,10 @@ class ArucoHoverTeacherEnv(DirectRLEnv):
         self._previous_omega_err[env_ids] = 0.0
 
         # --------------6. Domain randomisation-----------------------------------
-        self._domain_randomise(env_ids)
-
-        # --------------7. Visual domain randomisation (Phase 2 student robustness) --------------
-        self._randomise_visuals(env_ids)          # lights, ArUco tint, etc.
-        self._randomize_wall_textures(env_ids)    # per-env wall textures via Replicator
+        if not self.cfg.nominal_mode:
+            self._domain_randomise(env_ids)
+            self._randomise_visuals(env_ids)
+            self._randomize_wall_textures(env_ids)
 
 
 class ArucoHoverStudentEnv(ArucoHoverTeacherEnv):
@@ -1631,9 +1936,12 @@ class ArucoHoverStudentEnv(ArucoHoverTeacherEnv):
         if env_ids is None or len(env_ids) == self.num_envs:
             env_ids = self._robot._ALL_INDICES
 
-        # IMU bias: accel bias (m/s^2), gyro bias (rad/s)
-        accel_bias_std = 0.1
-        gyro_bias_std  = 0.02
+        if self.cfg.nominal_mode:
+            accel_bias_std = 0.0
+            gyro_bias_std = 0.0
+        else:
+            accel_bias_std = 0.1
+            gyro_bias_std = 0.02
 
         accel_bias = torch.randn(len(env_ids), 3, device=self.device) * accel_bias_std
         gyro_bias  = torch.randn(len(env_ids), 3, device=self.device) * gyro_bias_std

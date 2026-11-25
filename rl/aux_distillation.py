@@ -37,7 +37,7 @@ class AuxDistillation(Distillation):
 
         warmup_updates = 25
 
-        if self.num_updates <= warmup_updates:
+        if self.num_updates < warmup_updates:
             return float(self.beta_start)
 
         anneal_step = min(
@@ -59,22 +59,33 @@ class AuxDistillation(Distillation):
 
     def act(self, obs, privileged_obs):
         """
-        Override: step env with blended action, but store teacher label as BC target.
-        Base class act() handles the student forward pass and teacher label storage.
-        """
-        student_action = super().act(obs, privileged_obs)
+        Collect deterministic student-induced states while retaining the
+        privileged teacher action as the imitation target.
 
+        A complete environment is controlled by either the teacher or student
+        for this step. Teacher and student actions are never numerically averaged.
+        """
         with torch.no_grad():
+            # Match the deterministic student used by offline collection
+            # and deployment.
+            student_action = self.policy.act_inference(obs)
+
+            # This exact tensor is both the stored supervision label and the
+            # action used when teacher intervention is selected.
             teacher_action = self.policy.evaluate(privileged_obs)
 
-        beta = self.beta
+        self.transition.actions = student_action.detach()
+        self.transition.privileged_actions = teacher_action.detach()
+        self.transition.observations = obs
+        self.transition.privileged_observations = privileged_obs
 
         teacher_mask = (
             torch.rand(
                 student_action.shape[0],
                 1,
                 device=student_action.device,
-            ) < beta
+            )
+            < self.beta
         )
 
         return torch.where(
@@ -90,6 +101,8 @@ class AuxDistillation(Distillation):
         return super().process_env_step(rewards, dones, infos)
 
     def update(self):
+        # Beta that actually generated the rollout currently in storage.
+        rollout_beta = self.beta
         self.num_updates += 1
 
         if len(self._bbox_gt_buffer) > 0:
@@ -185,5 +198,5 @@ class AuxDistillation(Distillation):
         return {
             "behavior": mean_behavior_loss,
             "aux": mean_aux_loss,
-            "beta": self.beta,
+            "beta": rollout_beta,
         }

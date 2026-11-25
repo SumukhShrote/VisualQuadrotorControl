@@ -4,6 +4,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """Script to train RL agent with RSL-RL."""
+from pathlib import Path as _RepositoryPath
 
 """Launch Isaac Sim Simulator first."""
 
@@ -637,7 +638,7 @@ def main(
             if frame_count[0] == 0:
                 import os
                 from PIL import Image
-                save_dir = os.path.expanduser("~/AerialCatching/videos")
+                save_dir = os.path.expanduser(str(_RepositoryPath(__file__).resolve().parents[1] / 'results/videos'))
                 os.makedirs(save_dir, exist_ok=True)
                 Image.fromarray(rgb[0].cpu().numpy()).save(os.path.join(save_dir, "frame0.png"))
                 # Image.fromarray(rgb[32].cpu().numpy()).save(os.path.join(save_dir, "frame32.png"))
@@ -994,7 +995,7 @@ def main(
 
     print("\n\nPlease run the following line to evaluate the trained model: ")
     print(
-        f"python -m rl.eval_rslrl --video --task {args_cli.task} "
+        f"python -m evaluation.eval_rslrl --video --task {args_cli.task} "
         f"--num_envs 100 --experiment_name {agent_cfg.experiment_name} "
         f"--load_run {agent_run_name}"
     )

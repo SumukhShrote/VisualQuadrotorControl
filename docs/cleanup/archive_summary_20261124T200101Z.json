@@ -1,0 +1,15 @@
+{
+  "timestamp_utc": "2026-11-24T20:01:12.508091+00:00",
+  "operation": "archive_historical_artifacts",
+  "closed_loop_reproduction_passed": true,
+  "reproduction_directory": "results/reference/refactor_validation_20261124T195541Z",
+  "reproduction_episodes": 512,
+  "reproduction_successes": 512,
+  "reference_artifacts_verified": 12,
+  "archive": "/home/sumukh/VisualQuadrotorLearning_archive",
+  "archive_operations": 972,
+  "archived_bytes": 45975289148,
+  "deleted_cache_bytes": 533977743,
+  "protected_or_skipped": 186,
+  "unique_research_artifacts_permanently_deleted": 0
+}

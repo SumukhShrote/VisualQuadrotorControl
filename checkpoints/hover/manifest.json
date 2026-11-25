@@ -1,0 +1,32 @@
+[
+  {
+    "path": "checkpoints/hover/frozen/checkpoint.pt",
+    "source": "results/runs/fresh_visual_student_20261124T211001Z/06_pose_attention_dagger/best.pt",
+    "sha256": "9d246aa579eaf353d05a74b02ee5cc334028bfd3e9f1474f38061edb13455471",
+    "bytes": 764111
+  },
+  {
+    "path": "checkpoints/hover/frozen/policy.ts",
+    "source": "results/runs/fresh_visual_student_20261124T211001Z/06_pose_attention_dagger/best_policy.ts",
+    "sha256": "b1c878d5c52aa72328c8c53c55b50716d515a5f598099fdad56bcae3b9b49ea2",
+    "bytes": 2421146
+  },
+  {
+    "path": "checkpoints/hover/frozen/pose_initialization.pt",
+    "source": "results/runs/fresh_visual_student_20261124T211001Z/06_pose_attention_dagger/pose_best.pt",
+    "sha256": "f29f773bd67911e9820397c9de782943849a985beb6529ce5daf62cb7fca91a3",
+    "bytes": 327533
+  },
+  {
+    "path": "checkpoints/hover/end_to_end/checkpoint.pt",
+    "source": "results/runs/fresh_visual_student_20261124T211001Z/08_end_to_end_dagger/latest.pt",
+    "sha256": "979e1a02e01682b6fbe68ec4598d7eb0a3fd1bd223ca98285a94fdf86fa659df",
+    "bytes": 5947083
+  },
+  {
+    "path": "checkpoints/hover/end_to_end/policy.ts",
+    "source": "results/runs/fresh_visual_student_20261124T211001Z/08_end_to_end_dagger/latest_verified_policy.ts",
+    "sha256": "976949d07234b8e9ce45a03c43567932d08cf8decec7e9af902ac1e6994f4581",
+    "bytes": 2427382
+  }
+]

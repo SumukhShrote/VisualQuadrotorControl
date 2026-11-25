@@ -1,0 +1,42 @@
+[
+  {
+    "path": "results/runs/fresh_visual_student_20261124T211001Z/01_temporal/multiscale_transformer_H32.pt",
+    "sha256": "ed21674cbe0e9827754795e89dce571c43eee1f5547791be84623b4835ffbd9b",
+    "bytes": 1144899
+  },
+  {
+    "path": "results/runs/fresh_visual_student_20261124T211001Z/02_visual_imitation/policy.pt",
+    "sha256": "356860cb7febb73643078a25677512e367aabf61adcdf5b97a75a10b74fd57bb",
+    "bytes": 1470411
+  },
+  {
+    "path": "results/runs/fresh_visual_student_20261124T211001Z/03_action_history/policy.pt",
+    "sha256": "eac0e03816f2dff26228e49389f641e70c213feb10cb13bf2dc23ec03fbfd8d3",
+    "bytes": 1502417
+  },
+  {
+    "path": "results/runs/fresh_visual_student_20261124T211001Z/05_dagger_round1/finetuned_k8/policy.pt",
+    "sha256": "b1f766fb1f98d99858cca6fe329a7a96d902f4da8582fb05566f1f538ae446f2",
+    "bytes": 1502481
+  },
+  {
+    "path": "results/runs/fresh_visual_student_20261124T211001Z/05_dagger_round2/finetuned_k8/policy.pt",
+    "sha256": "5be0d44bed8c53257a24ac53ecac187494a0e7c20afffb54366d687a0d42645b",
+    "bytes": 1502481
+  },
+  {
+    "path": "results/runs/fresh_visual_student_20261124T211001Z/06_pose_attention_dagger/pose_best.pt",
+    "sha256": "f29f773bd67911e9820397c9de782943849a985beb6529ce5daf62cb7fca91a3",
+    "bytes": 327533
+  },
+  {
+    "path": "results/runs/fresh_visual_student_20261124T211001Z/06_pose_attention_dagger/best.pt",
+    "sha256": "9d246aa579eaf353d05a74b02ee5cc334028bfd3e9f1474f38061edb13455471",
+    "bytes": 764111
+  },
+  {
+    "path": "results/runs/fresh_visual_student_20261124T211001Z/06_pose_attention_dagger/best_policy.ts",
+    "sha256": "b1c878d5c52aa72328c8c53c55b50716d515a5f598099fdad56bcae3b9b49ea2",
+    "bytes": 2421146
+  }
+]

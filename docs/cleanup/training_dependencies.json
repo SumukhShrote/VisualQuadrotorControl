@@ -1,0 +1,27 @@
+[
+  {
+    "path": "experiments/state_bottleneck/data/pooled_student_epoch70_all_levels.pt",
+    "bytes": 121408423,
+    "sha256": "5603a2d54201a564b2fb08cf838831abe2a75e2033d5fe570cee0a56c31e5c3a"
+  },
+  {
+    "path": "experiments/state_bottleneck/state_reconstruction_20261119T195844Z/protocol.json",
+    "bytes": 1702,
+    "sha256": "33e33eb675efc52f37cc7fc72f1940ea351d27d9db34bda280d132bc26f94aef"
+  },
+  {
+    "path": "experiments/state_bottleneck/supervised_multiscale_transformer.py",
+    "bytes": 22082,
+    "sha256": "34230a4ca9dd0b3ba1ac8c40aac5312a8b63b7172032e1480392d1c6f3a15f45"
+  },
+  {
+    "path": "experiments/state_bottleneck/train_two_gpu_visual_policies.py",
+    "bytes": 21576,
+    "sha256": "49ac920e9ce50c4d622a4e3d802bee0b8672c1be6b0543b00cca82716a856e12"
+  },
+  {
+    "path": "experiments/state_bottleneck/supervised_observability_probe.py",
+    "bytes": 18972,
+    "sha256": "2f41ec2fea0d082522fbcf224d061a86592de21c482e8d061e89d0ea3e691fcd"
+  }
+]

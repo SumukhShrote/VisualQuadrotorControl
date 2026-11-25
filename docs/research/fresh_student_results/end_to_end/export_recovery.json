@@ -1,0 +1,28 @@
+[
+  {
+    "round": 18,
+    "checkpoint": "/home/sumukh/VisualQuadrotorLearning/results/runs/fresh_visual_student_20261124T211001Z/08_end_to_end_dagger/best.pt",
+    "checkpoint_sha256": "7346753b490e6c0c3bc3d716182c35b289cba25612baf993a8f1313e9ece62ae",
+    "export": "/home/sumukh/VisualQuadrotorLearning/results/runs/fresh_visual_student_20261124T211001Z/08_end_to_end_dagger/best_verified_policy.ts",
+    "export_sha256": "5e175b37bc979227aace6a6bec201f0e09b0b20907970e25796e4dcb00f530c1",
+    "parameter_changes": {
+      "geometry": 0.3753652572631836,
+      "linear_velocity": 0.3949511647224426,
+      "angular_velocity": 0.3240012526512146,
+      "spatial_pose": 0.4988017976284027
+    }
+  },
+  {
+    "round": 24,
+    "checkpoint": "/home/sumukh/VisualQuadrotorLearning/results/runs/fresh_visual_student_20261124T211001Z/08_end_to_end_dagger/latest.pt",
+    "checkpoint_sha256": "979e1a02e01682b6fbe68ec4598d7eb0a3fd1bd223ca98285a94fdf86fa659df",
+    "export": "/home/sumukh/VisualQuadrotorLearning/results/runs/fresh_visual_student_20261124T211001Z/08_end_to_end_dagger/latest_verified_policy.ts",
+    "export_sha256": "976949d07234b8e9ce45a03c43567932d08cf8decec7e9af902ac1e6994f4581",
+    "parameter_changes": {
+      "geometry": 0.4402301013469696,
+      "linear_velocity": 0.460407018661499,
+      "angular_velocity": 0.3739585280418396,
+      "spatial_pose": 0.5415684580802917
+    }
+  }
+]

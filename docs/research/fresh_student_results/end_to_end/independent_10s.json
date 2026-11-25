@@ -1,0 +1,78 @@
+{
+  "implementation": "canonical_eager_controller",
+  "candidate_paths": [
+    "/home/sumukh/VisualQuadrotorLearning/results/runs/fresh_visual_student_20261124T211001Z/08_end_to_end_dagger/latest.pt",
+    "/home/sumukh/VisualQuadrotorLearning/results/runs/fresh_visual_student_20261124T211001Z/05_dagger_round2/finetuned_k8/policy.pt",
+    "/home/sumukh/VisualQuadrotorLearning/results/runs/fresh_visual_student_20261124T211001Z/08_end_to_end_dagger/latest_verified_policy.ts"
+  ],
+  "results": [
+    {
+      "stage": "independent_validation",
+      "policy": "candidate",
+      "seed": 38001,
+      "level": 1.0,
+      "expanded": false,
+      "duration_s": 9.98,
+      "num_envs": 256,
+      "survival_count": 256,
+      "survival": 1.0,
+      "hold_count": 256,
+      "hold": 1.0,
+      "mean_episode_length": 499.0,
+      "settled_error_m": 0.02370598539710045,
+      "settled_lateral_error_m": 0.007884658873081207,
+      "settled_speed_mps": 0.000574787613004446
+    },
+    {
+      "stage": "independent_validation",
+      "policy": "candidate",
+      "seed": 38001,
+      "level": 1.0,
+      "expanded": true,
+      "duration_s": 9.98,
+      "num_envs": 256,
+      "survival_count": 256,
+      "survival": 1.0,
+      "hold_count": 256,
+      "hold": 1.0,
+      "mean_episode_length": 499.0,
+      "settled_error_m": 0.023031728342175484,
+      "settled_lateral_error_m": 0.00808529369533062,
+      "settled_speed_mps": 0.0005829035653732717
+    },
+    {
+      "stage": "independent_validation",
+      "policy": "candidate",
+      "seed": 38002,
+      "level": 1.0,
+      "expanded": false,
+      "duration_s": 9.98,
+      "num_envs": 256,
+      "survival_count": 256,
+      "survival": 1.0,
+      "hold_count": 256,
+      "hold": 1.0,
+      "mean_episode_length": 499.0,
+      "settled_error_m": 0.02355966717004776,
+      "settled_lateral_error_m": 0.007901471108198166,
+      "settled_speed_mps": 0.0005707194213755429
+    },
+    {
+      "stage": "independent_validation",
+      "policy": "candidate",
+      "seed": 38002,
+      "level": 1.0,
+      "expanded": true,
+      "duration_s": 9.98,
+      "num_envs": 256,
+      "survival_count": 255,
+      "survival": 0.99609375,
+      "hold_count": 255,
+      "hold": 0.99609375,
+      "mean_episode_length": 497.5546875,
+      "settled_error_m": 0.023479759693145752,
+      "settled_lateral_error_m": 0.00794561393558979,
+      "settled_speed_mps": 0.0005801058141514659
+    }
+  ]
+}

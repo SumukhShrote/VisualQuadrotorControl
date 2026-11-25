@@ -1,0 +1,28 @@
+{
+  "timestamp_utc": "2026-11-24T19:50:30.400544+00:00",
+  "operation": "extract_canonical_models",
+  "structural_reference": "PratikKunapuli/AerialManipulation",
+  "sources": {
+    "experiments/state_bottleneck/supervised_multiscale_transformer.py": "34230a4ca9dd0b3ba1ac8c40aac5312a8b63b7172032e1480392d1c6f3a15f45",
+    "experiments/state_bottleneck/train_two_gpu_visual_policies.py": "49ac920e9ce50c4d622a4e3d802bee0b8672c1be6b0543b00cca82716a856e12",
+    "experiments/state_bottleneck/launch_action_history_study.py": "10c4669899c29a97268689f596bf7dc9db9ff35e02698435dd7c97741733f83c",
+    "train_pose_attention_resume_dagger.py": "e0357e2773751ed35bf6409d6f5d1548341d5a1f1086f50122c5194bc9c8f48d"
+  },
+  "generated_modules": {
+    "models/temporal_transformer.py": "629fc98cc4290d0ac1f562cd4546e6ded0e0769f68a32d81d42609f6444ea3bf",
+    "models/spatial_pose_attention.py": "e717abb5533315020f002dd30b71eb517f20393feb9c308e061f951f9356bfb5",
+    "controllers/visual_policy.py": "5c00a2b7f24129df4ef6b54db4597d3544cbc809e467d36baa8bd9bd8888e5e3",
+    "controllers/pose_attention_policy.py": "04b42553beddc4585df4f3b8407ab999b4f95c774d04acae511657723161dc9a",
+    "utils/marker_projection.py": "775db3d3f4e2476e24b36b5805309a1accba9358c67487ed3fac74766dc8bddc"
+  },
+  "intentional_changes": [
+    "Separated model construction from checkpoint loading",
+    "Replaced dynamic experimental imports",
+    "Removed global device dependency",
+    "Preserved original parameter names",
+    "Preserved original feature ordering"
+  ],
+  "numerical_equivalence_verified": false,
+  "original_files_deleted": 0,
+  "original_files_moved": 0
+}

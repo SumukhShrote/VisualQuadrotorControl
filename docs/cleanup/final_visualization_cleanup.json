@@ -1,0 +1,21 @@
+{
+  "deleted": [
+    {
+      "path": "results/runs/fresh_visual_student_20261124T211001Z/video_corrected_scene_20261125T010832Z",
+      "bytes": 4144889
+    },
+    {
+      "path": "results/runs/fresh_visual_student_20261124T211001Z/video_follow_smoke_20261125T010328Z",
+      "bytes": 1953669
+    },
+    {
+      "path": "results/runs/fresh_visual_student_20261124T211001Z/video_joint_smoke_20261125T005941Z",
+      "bytes": 4069795
+    },
+    {
+      "path": "results/runs/fresh_visual_student_20261124T211001Z/video_marker_follow_20261125T010518Z",
+      "bytes": 2210698
+    }
+  ],
+  "reclaimed_bytes": 12379051
+}
