@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <em>End-to-end visual controller at maximum curriculum difficulty under expanded initial conditions.</em>
+  <em>Vision-based quadrotor recovery and precise hover using the end-to-end Transformer controller (5 seconds, real time).</em>
 </p>
 
 
