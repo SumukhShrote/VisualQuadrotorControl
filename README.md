@@ -1,5 +1,14 @@
 # Visual Quadrotor Control
 
+<p align="center">
+  <img src="docs/media/visual_hover.gif" width="720" alt="Visual quadrotor hover control demonstration">
+</p>
+
+<p align="center">
+  <em>End-to-end visual controller at maximum curriculum difficulty under expanded initial conditions.</em>
+</p>
+
+
 Structured visual representation learning for high-performance quadrotor control using physical-state supervision, imitation learning and DAgger.
 
 ## Results
